@@ -17,7 +17,7 @@ registries:
       remoteURL: "*"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker:/var/lib/docker
+      # - /var/lib/docker:/var/lib/docker
 HERE
 k3d cluster create mytest --config "$configfile"
 

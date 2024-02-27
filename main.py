@@ -1,6 +1,7 @@
 import docker
 import glob
 import hashlib
+import os
 import tarfile
 from flask import Flask, request, send_file
 
@@ -33,6 +34,10 @@ def docker_get_image_tarball(image_id):
 app = Flask(__name__)
 client = docker.from_env()
 
+CACHE_DIRECTORY = '/var/lib/k3d-registry-dockerd/cache'
+CACHE_BLOBS_SHA256_DIRECTORY = os.path.join(CACHE_DIRECTORY, 'blobs/sha256')
+CACHE_INDEXES_DIRECTORY = os.path.join(CACHE_DIRECTORY, 'indexes')
+
 @app.route("/")
 def hello_world():
     return "Hello, world!"
@@ -41,6 +46,48 @@ def hello_world():
 def v2():
     # return ('', 204)
     return "Hello, world!"
+
+def find_cached_blob(sha256sum):
+    cache_filename = os.path.join(CACHE_BLOBS_SHA256_DIRECTORY, sha256sum)
+    if os.path.exists(cache_filename):
+        return cache_filename
+
+def find_cached_index(name):
+    cache_filename = os.path.join(CACHE_INDEXES_DIRECTORY, name, 'index.json')
+    if os.path.exists(cache_filename):
+        return cache_filename
+
+def save_oci_image_to_cache(name, tarfile_object):
+    while True:
+        ti = tarfile_object.next()
+        if ti is None:
+            break
+        if ti.name.startswith('blobs/sha256/'):
+            tf = tarfile_object.extractfile(ti)
+            output_file = os.path.join(CACHE_BLOBS_SHA256_DIRECTORY, ti.name.replace('blobs/sha256/', ''))
+            app.logger.info(f"writing {output_file}")
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            with open(output_file, 'wb') as f:
+                while True:
+                    chunk = tf.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        if ti.name == 'index.json':
+            tf = tarfile_object.extractfile(ti)
+            bdata = tf.read()
+            m = hashlib.sha256()
+            m.update(bdata)
+
+            for output_file in [
+                os.path.join(CACHE_INDEXES_DIRECTORY, name, 'index.json'),
+                os.path.join(CACHE_BLOBS_SHA256_DIRECTORY, m.hexdigest())
+            ]:
+                app.logger.info(f"writing {output_file}")
+                os.makedirs(os.path.dirname(output_file), exist_ok=True)
+                with open(output_file, 'wb') as f:
+                    f.write(bdata)
+
 
 def find_blob(domain, namespace, image, reference, mimetype):
     if not domain:
@@ -52,36 +99,32 @@ def find_blob(domain, namespace, image, reference, mimetype):
     
     # pull from Docker's export cache, if it exists
     # TODO: pull from Docker's containerd storage (overlayfs?), if that storage engine is being used
-    cached = glob.glob(f'/var/lib/docker/tmp/docker-export-*/blobs/sha256/{reference.split("sha256:")[1]}')
+    # cached = glob.glob(f'/var/lib/docker/tmp/docker-export-*/blobs/sha256/{reference.split("sha256:")[1]}')
+    # if cached:
+    #     app.logger.info(f'using cached file {cached[0]}')
+    #     return send_file(cached[0], mimetype=mimetype if mimetype else 'application/octet-stream')
+
+    # pull from our own cache, if it exists
+    cached = find_cached_blob(reference.split("sha256:")[1])
     if cached:
-        app.logger.info(f'using cached file {cached[0]}')
-        return send_file(cached[0], mimetype=mimetype if mimetype else 'application/octet-stream')
+        app.logger.info(f'using cached file {cached}')
+        return send_file(cached, mimetype=mimetype if mimetype else 'application/octet-stream')
 
     # go pull some tarballs and take a look
     name=f'{domain}/{namespace}/{image}'
     if name.startswith('docker.io/'):
         name = name[len('docker.io/'):]
+    # TODO: could probably be smarter and keep a cache of which blobs belong to which images, instead
+    # of iterating all of them?
     for image_obj in client.images.list(name):
-        # TODO: could probably be smarter and keep a cache of which blobs belong to which images?
         t = tarfile.TarFile(fileobj=docker_get_image_tarball(image_obj.id))
-        while True:
-            ti = t.next()
-            if ti is None:
-                break
-            if ti.name == f'blobs/sha256/{reference.split("sha256:")[1]}':
-                # TODO: could also get mimetype by trying blobs that look like JSON / come from
-                # a manifest request, and use the embedded mediaType
-                resp = send_file(t.extractfile(ti), mimetype=mimetype if mimetype else 'application/octet-stream')
-                resp.headers.add('content-length', ti.size)
-                return resp
-            if ti.name == 'index.json':
-                fi = t.extractfile(ti)
-                bdata = fi.read()
-                m = hashlib.sha256()
-                m.update(bdata)
-                app.logger.info("trying index.json, digest %r" % m.hexdigest())
-                if m.hexdigest() == reference.split("sha256:")[1]:
-                    return (bdata, 200, {"content-type": "application/vnd.oci.image.index.v1+json"})
+        save_oci_image_to_cache(name, t)
+        # TODO: remove old cached files if disk usage becomes too great
+
+        cached = find_cached_blob(reference.split("sha256:")[1])
+        if cached:
+            app.logger.info(f'using cached file {cached}')
+            return send_file(cached, mimetype=mimetype if mimetype else 'application/octet-stream')
                 
     return ('No blob found', 404)
 
@@ -118,10 +161,15 @@ def manifests(namespace, image, reference):
         mimetype = request.headers.get('accept').split(',')[0].strip()
         return find_blob(domain, namespace, image, reference, mimetype=mimetype)
 
-    def find_image():
-        name=f'{domain}/{namespace}/{image}'
-        if name.startswith('docker.io/'):
+    name=f'{domain}/{namespace}/{image}'
+    if name.startswith('docker.io/'):
             name = name[len('docker.io/'):]
+    cached = find_cached_index(name)
+    if cached:
+        app.logger.info(f'using cached file {cached}')
+        return send_file(cached, mimetype='application/vnd.oci.image.index.v1+json')
+
+    def find_image():
         for i in client.images.list(name):
             for t in i.tags:
                 if t.count(":") != 1:
@@ -139,18 +187,12 @@ def manifests(namespace, image, reference):
 
     # this tarfile is in OCI image format
     t = tarfile.TarFile(fileobj=docker_get_image_tarball(image_obj.id))
-    while True:
-        ti = t.next()
-        if ti is None:
-            break
-        app.logger.info(ti)
-        if ti.name == 'index.json':
-            bdata = t.extractfile(ti).read()
-            m = hashlib.sha256()
-            m.update(bdata)
-            digest = m.hexdigest()
-            app.logger.info(digest)
-            return (bdata, 200, {"content-type": "application/vnd.oci.image.index.v1+json"})
+    save_oci_image_to_cache(name, t)
+
+    cached = find_cached_index(name)
+    if cached:
+        app.logger.info(f'using cached file {cached}')
+        return send_file(cached, mimetype='application/vnd.oci.image.index.v1+json')
     return ('No manifest found', 500)
 
 if __name__ == "__main__":
