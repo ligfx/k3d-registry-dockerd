@@ -1,7 +1,0 @@
-mirrors:
-  "*":
-    endpoint:
-      - http://my-registry:5000
-  "docker.io":
-    endpoint:
-      - http://my-registry:5000
