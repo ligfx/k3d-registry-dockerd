@@ -60,13 +60,17 @@ def find_cached_blob(sha256sum):
         return cache_filename
 
 
-def find_cached_index(name):
-    cache_filename = os.path.join(CACHE_INDEXES_DIRECTORY, name, "index.json")
+def cached_index_filename(image_id, name):
+    return os.path.join(CACHE_INDEXES_DIRECTORY, name, image_id, "index.json")
+
+
+def find_cached_index(image_id, name):
+    cache_filename = cached_index_filename(image_id, name)
     if os.path.exists(cache_filename):
         return cache_filename
 
 
-def save_oci_image_to_cache(name, tarfile_object):
+def save_oci_image_to_cache(image_id, name, tarfile_object):
     while True:
         ti = tarfile_object.next()
         if ti is None:
@@ -91,7 +95,7 @@ def save_oci_image_to_cache(name, tarfile_object):
             m.update(bdata)
 
             for output_file in [
-                os.path.join(CACHE_INDEXES_DIRECTORY, name, "index.json"),
+                cached_index_filename(image_id, name),
                 os.path.join(CACHE_BLOBS_SHA256_DIRECTORY, m.hexdigest()),
             ]:
                 app.logger.info(f"writing {output_file}")
@@ -131,7 +135,7 @@ def find_blob(domain, namespace, image, reference, mimetype):
     # of iterating all of them?
     for image_obj in client.images.list(name):
         t = tarfile.TarFile(fileobj=docker_get_image_tarball(image_obj.id))
-        save_oci_image_to_cache(name, t)
+        save_oci_image_to_cache(image_obj.id, name, t)
         # TODO: remove old cached files if disk usage becomes too great
 
         cached = find_cached_blob(reference.split("sha256:")[1])
@@ -181,10 +185,6 @@ def manifests(namespace, image, reference):
     name = f"{domain}/{namespace}/{image}"
     if name.startswith("docker.io/"):
         name = name[len("docker.io/") :]
-    cached = find_cached_index(name)
-    if cached:
-        app.logger.info(f"using cached file {cached}")
-        return send_file(cached, mimetype="application/vnd.oci.image.index.v1+json")
 
     def find_image():
         for i in client.images.list(name):
@@ -199,14 +199,19 @@ def manifests(namespace, image, reference):
     if not image_obj:
         return ("", 404)
 
+    cached = find_cached_index(image_obj.id, name)
+    if cached:
+        app.logger.info(f"using cached file {cached}")
+        return send_file(cached, mimetype="application/vnd.oci.image.index.v1+json")
+
     if request.method == "HEAD":
         return ("", 200)
 
     # this tarfile is in OCI image format
     t = tarfile.TarFile(fileobj=docker_get_image_tarball(image_obj.id))
-    save_oci_image_to_cache(name, t)
+    save_oci_image_to_cache(image_obj.id, name, t)
 
-    cached = find_cached_index(name)
+    cached = find_cached_index(image_obj.id, name)
     if cached:
         app.logger.info(f"using cached file {cached}")
         return send_file(cached, mimetype="application/vnd.oci.image.index.v1+json")
