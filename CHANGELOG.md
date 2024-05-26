@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
+## [Unreleased]
+
+- Rewrite the whole thing in [Go](https://go.dev/). It seems much faster! And this opens up possibilities of handling requests in parallel, as well (currently limited to one request at time, since otherwise you get a thundering herd of calls to the Docker API). Maybe one day this could get integrated into [k3d](https://k3d.io/) itself
+- Allow image names that don't have a slash in them. Useful if you're using any raw base images for your pods, e.g. `golang:1.22.3-alpine3.20` or `alpine:3.20.0`.
+
 ## [0.3] - 2024-05-25
 
 - Fix error "Not supported URL scheme http+docker" by updating Python requirement [`docker`](https://pypi.org/project/docker/) from 7.0.0 to 7.1.0

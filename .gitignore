@@ -1,2 +1,2 @@
-.virtualenv
-__pycache__
+k3d-registry-dockerd
+cache/
