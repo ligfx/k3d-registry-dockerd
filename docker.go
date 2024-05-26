@@ -36,9 +36,16 @@ func NewDockerClient() (*DockerClient, error) {
 	return client, nil
 }
 
-func (client *DockerClient) ImageList(reference string) ([]DockerImageInfo, error) {
-	// TODO: use contexts
-	resp, err := client.httpClient.Get(fmt.Sprintf("http://unix/v1.45/images/json?filters={\"reference\":[\"%s\"]}", reference))
+func (client *DockerClient) ImageList(ctx context.Context, reference string) ([]DockerImageInfo, error) {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		"GET",
+		fmt.Sprintf("http://unix/v1.45/images/json?filters={\"reference\":[\"%s\"]}", reference),
+		nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -53,12 +60,16 @@ func (client *DockerClient) ImageList(reference string) ([]DockerImageInfo, erro
 	return images, err
 }
 
-func (client *DockerClient) ImagePull(reference string, statusHandler func(statusMessage string)) error {
-	// TODO: use contexts
-	resp, err := client.httpClient.Post(
+func (client *DockerClient) ImagePull(ctx context.Context, reference string, statusHandler func(statusMessage string)) error {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		"POST",
 		fmt.Sprintf("http://unix/v1.45/images/create?fromImage=%s", reference),
-		"text/plain",
 		nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -81,7 +92,6 @@ func (client *DockerClient) ImagePull(reference string, statusHandler func(statu
 }
 
 func (client *DockerClient) ImageExport(ctx context.Context, reference string) (*tar.Reader, error) {
-	// TODO: use contexts
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://unix/v1.45/images/%s/get", reference), nil)
 	if err != nil {
 		return nil, err

@@ -29,18 +29,18 @@ func handleV2(w http.ResponseWriter, req *http.Request) {
 }
 
 func findImage(ctx context.Context, fullName string) (*DockerImageInfo, error) {
-	images, err := docker.ImageList(fullName)
+	images, err := docker.ImageList(ctx, fullName)
 	if err != nil {
 		return nil, err
 	}
 	if len(images) == 0 {
-		err = docker.ImagePull(fullName, func(statusMessage string) {
+		err = docker.ImagePull(ctx, fullName, func(statusMessage string) {
 			log.Println(statusMessage)
 		})
 		if err != nil {
 			return nil, err
 		}
-		images, err = docker.ImageList(fullName)
+		images, err = docker.ImageList(ctx, fullName)
 		if err != nil {
 			return nil, err
 		}
