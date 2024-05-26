@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.3] - 2024-05-25
 
 - Fix error "Not supported URL scheme http+docker" by updating Python requirement [`docker`](https://pypi.org/project/docker/) from 7.0.0 to 7.1.0
 
