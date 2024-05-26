@@ -21,7 +21,7 @@ apiVersion: k3d.io/v1alpha5
 kind: Simple
 registries:
   create:
-    image: ligfx/k3d-registry-dockerd:v0.3
+    image: ligfx/k3d-registry-dockerd:v0.4
     proxy:
       remoteURL: "*"
     volumes:
