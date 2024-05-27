@@ -16,10 +16,6 @@ type DockerImageInfo struct {
 	Id string
 }
 
-type DockerImagePullStatus struct {
-	Status string
-}
-
 type DockerClient struct {
 	httpClient http.Client
 }
