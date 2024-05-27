@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -117,6 +116,7 @@ func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) 
 		if strings.HasPrefix(header.Name, "blobs/") {
 			// blobs get written directly
 			cachePath = fmt.Sprint(CACHE_DIRECTORY, "/", header.Name)
+			// TODO: if cachePath exists already, skip it
 			bytesWritten, err := copyToFile(cachePath, tarball)
 			if err != nil {
 				return err
@@ -175,13 +175,12 @@ func handleBlobs(w http.ResponseWriter, req *http.Request) {
 	// get the HTTP arguments
 	// name := req.PathValue("name")
 	digest := req.PathValue("digest")
-	// req.ParseForm()
-	// if len(req.Form["ns"]) != 1 {
+	// domain := req.URL.Query().Get("ns")
+	// if domain == "" {
 	// 	// don't support acting as own repo
 	// 	http.NotFound(w, req)
 	// 	return
 	// }
-	// domain := req.Form["ns"][0]
 
 	// TODO: check accept header?
 
@@ -208,13 +207,12 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	// get the HTTP arguments
 	name := req.PathValue("name")
 	tagOrDigest := req.PathValue("tagOrDigest")
-	req.ParseForm()
-	if len(req.Form["ns"]) != 1 {
+	domain := req.URL.Query().Get("ns")
+	if domain == "" {
 		// don't support acting as own repo
 		http.NotFound(w, req)
 		return
 	}
-	domain := req.Form["ns"][0]
 
 	// handle manifests which are referenced by digest (just grab the blob)
 	if strings.HasPrefix(tagOrDigest, "sha256:") {
@@ -240,9 +238,6 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// TODO: check accept header?
-	w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
-
 	// build the full image name, e.g. domain/namespace/image:tag
 	fullName := fmt.Sprint(name, ":", tagOrDigest)
 	if domain != "docker.io" {
@@ -250,7 +245,8 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// try to get the manifest, then write it out
-	// TODO: set content type
+	// TODO: check accept header?
+	w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
 	manifest, err := getManifest(req.Context(), fullName)
 	if err != nil {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
@@ -283,39 +279,14 @@ func main() {
 	defer docker.Close()
 
 	// the actual HTTP server
-	blobsRegex := regexp.MustCompile("^/v2/(?P<name>.+)/blobs/(?P<digest>[^/]+)$")
-	manifestsRegex := regexp.MustCompile("^/v2/(?P<name>.+)/manifests/(?P<tagOrDigest>[^/]+)$")
-	http.HandleFunc("/", OneAtATimeMiddleware(LoggingMiddleware(func(w http.ResponseWriter, req *http.Request) {
-		// TODO: check HTTP method is GET or HEAD
-
-		// custom routing because image names may contain slashes / multiple path segments!
-		var m []string
-		m = blobsRegex.FindStringSubmatch(req.URL.Path)
-		if m != nil {
-			req.SetPathValue("name", m[1])
-			req.SetPathValue("digest", m[2])
-			handleBlobs(w, req)
-			return
-		}
-		m = manifestsRegex.FindStringSubmatch(req.URL.Path)
-		if m != nil {
-			req.SetPathValue("name", m[1])
-			req.SetPathValue("tagOrDigest", m[2])
-			handleManifests(w, req)
-			return
-		}
-		if req.URL.Path == "/v2" || req.URL.Path == "/v2/" {
-			handleV2(w, req)
-			return
-		}
-		if req.URL.Path == "/" {
-			handleHelloWorld(w, req)
-			return
-		}
-		http.NotFound(w, req)
-		return
-	})))
+	// uses custom routing because image names may contain slashes / multiple path segments!
+	// TODO: check HTTP method is GET or HEAD
+	mux := NewRegexpServeMux()
+	mux.HandleFunc("^/$", handleHelloWorld)
+	mux.HandleFunc("^/v2/$", handleV2)
+	mux.HandleFunc("^/v2/(?P<name>.+)/blobs/(?P<digest>[^/]+)$", handleBlobs)
+	mux.HandleFunc("^/v2/(?P<name>.+)/manifests/(?P<tagOrDigest>[^/]+)$", handleManifests)
 	log.Printf("Listening on :%d", *port)
-	err = http.ListenAndServe(fmt.Sprintf(":%d", *port), nil)
+	err = http.ListenAndServe(fmt.Sprintf(":%d", *port), OneAtATimeMiddleware(LoggingMiddleware(mux)))
 	log.Fatal(err)
 }
