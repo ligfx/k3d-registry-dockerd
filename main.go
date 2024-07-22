@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/sync/singleflight"
 	"io"
 	"log"
 	"net/http"
@@ -148,33 +149,43 @@ func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) 
 	}
 }
 
+var manifestSingleflightGroup singleflight.Group
+
 func getManifest(ctx context.Context, fullName string) (io.Reader, error) {
-	imageInfo, err := findImage(ctx, fullName)
-	if err != nil {
+	imageInfo, err, _ := manifestSingleflightGroup.Do(fullName, func() (any, error) {
+		imageInfo, err := findImage(ctx, fullName)
+		if err != nil {
+			return nil, err
+		}
+		if imageInfo == nil {
+			return nil, nil
+		}
+
+		reader, err := readCachedIndex(imageInfo.Id, "index.json")
+		if err != nil {
+			return nil, err
+		}
+		if reader != nil {
+			return imageInfo, nil
+		}
+
+		log.Printf("Exporting Docker image %s %s", fullName, imageInfo.Id)
+		tarball, err := docker.ImageExport(ctx, imageInfo.Id)
+		if err != nil {
+			return nil, err
+		}
+		err = saveOciImageToCache(fullName, imageInfo.Id, tarball)
+		if err != nil {
+			return nil, err
+		}
+
+		return imageInfo, err
+	})
+	if imageInfo == nil || err != nil {
 		return nil, err
-	}
-	if imageInfo == nil {
-		return nil, nil
 	}
 
-	reader, err := readCachedIndex(imageInfo.Id, "index.json")
-	if err != nil {
-		return nil, err
-	}
-	if reader != nil {
-		return reader, nil
-	}
-
-	log.Printf("Exporting Docker image %s %s", fullName, imageInfo.Id)
-	tarball, err := docker.ImageExport(ctx, imageInfo.Id)
-	if err != nil {
-		return nil, err
-	}
-	err = saveOciImageToCache(fullName, imageInfo.Id, tarball)
-	if err != nil {
-		return nil, err
-	}
-	return readCachedIndex(imageInfo.Id, "index.json")
+	return readCachedIndex(imageInfo.(*DockerImageInfo).Id, "index.json")
 }
 
 func handleBlobs(w http.ResponseWriter, req *http.Request) {
@@ -293,6 +304,6 @@ func main() {
 	mux.HandleFunc("^/v2/(?P<name>.+)/blobs/(?P<digest>[^/]+)$", handleBlobs)
 	mux.HandleFunc("^/v2/(?P<name>.+)/manifests/(?P<tagOrDigest>[^/]+)$", handleManifests)
 	log.Printf("Listening on :%d", *port)
-	err = http.ListenAndServe(fmt.Sprintf(":%d", *port), OneAtATimeMiddleware(LoggingMiddleware(mux)))
+	err = http.ListenAndServe(fmt.Sprintf(":%d", *port), LoggingMiddleware(mux))
 	log.Fatal(err)
 }

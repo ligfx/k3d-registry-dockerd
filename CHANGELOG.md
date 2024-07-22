@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+- Downloads multiple images in parallel, which improves cluster startup time. Uses [golang.org/x/sync's singleflight package](https://pkg.go.dev/golang.org/x/sync@v0.7.0/singleflight) to coalesce multiple requests for the same image and ensure that downloads don't interfere with one another.
 - Correctly return errors when copying files to local cache
 
 ## [0.4] - 2024-05-25

@@ -4,7 +4,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"sync"
 	"time"
 )
 
@@ -81,15 +80,4 @@ func (writer *loggingResponseWriter) WriteHeader(statusCode int) {
 	writer.StatusCode = statusCode
 	// TODO: handle the "superfluous call to WriteHeader" messages
 	writer.wrapped.WriteHeader(statusCode)
-}
-
-// OneAtATimeMiddleware returns an http.Handler which ensures only one HTTP
-// request is handled at a time.
-func OneAtATimeMiddleware(inner http.Handler) http.Handler {
-	var oneAtATime sync.Mutex
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		oneAtATime.Lock()
-		defer oneAtATime.Unlock()
-		inner.ServeHTTP(w, req)
-	})
 }
