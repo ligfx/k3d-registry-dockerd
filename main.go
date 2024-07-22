@@ -131,12 +131,18 @@ func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) 
 
 			cachePath = cachedIndexFilename(imageId, strings.TrimPrefix(header.Name, "/"))
 			bytesWritten, err := copyToFile(cachePath, bytes.NewReader(content))
+			if err != nil {
+				return err
+			}
 			log.Printf("Wrote %s (%d bytes)", cachePath, bytesWritten)
 
 			shasumbytes := sha256.Sum256(content)
 			shasum := hex.EncodeToString(shasumbytes[:])
 			cachePath = cachedBlobFilenameForSha256(shasum)
 			bytesWritten, err = copyToFile(cachePath, bytes.NewReader(content))
+			if err != nil {
+				return err
+			}
 			log.Printf("Wrote %s (%d bytes)", cachePath, bytesWritten)
 		}
 	}

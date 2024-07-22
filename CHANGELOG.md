@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
+## [Unreleased]
+
+- Correctly return errors when copying files to local cache
+
 ## [0.4] - 2024-05-25
 
 - Rewrite the whole thing in [Go](https://go.dev/). It seems much faster! And this opens up possibilities of handling requests in parallel, as well (currently limited to one request at time, since otherwise you get a thundering herd of calls to the Docker API). Maybe one day this could get integrated into [k3d](https://k3d.io/) itself
