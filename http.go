@@ -52,13 +52,18 @@ func (router RegexpServeMux) ServeHTTP(w http.ResponseWriter, req *http.Request)
 // HTTP requests.
 func LoggingMiddleware(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		loggingWriter := &loggingResponseWriter{w, 200}
+		loggingWriter := &loggingResponseWriter{w, 200, nil}
 		startTime := time.Now()
 		inner.ServeHTTP(loggingWriter, req)
 		responseDuration := time.Now().Sub(startTime)
-		log.Printf("%d %s - %s %s - (%v)\n",
+
+		var errorPart string
+		if loggingWriter.StatusCode/100 == 5 {
+			errorPart += " - " + string(loggingWriter.ErrorBody)
+		}
+		log.Printf("%d %s - %s %s - (%v)%s",
 			loggingWriter.StatusCode, http.StatusText(loggingWriter.StatusCode),
-			req.Method, req.URL.String(), responseDuration,
+			req.Method, req.URL.String(), responseDuration, errorPart,
 		)
 	})
 }
@@ -66,6 +71,7 @@ func LoggingMiddleware(inner http.Handler) http.Handler {
 type loggingResponseWriter struct {
 	wrapped    http.ResponseWriter
 	StatusCode int
+	ErrorBody  []byte
 }
 
 func (writer *loggingResponseWriter) Header() http.Header {
@@ -73,6 +79,9 @@ func (writer *loggingResponseWriter) Header() http.Header {
 }
 
 func (writer *loggingResponseWriter) Write(data []byte) (int, error) {
+	if writer.StatusCode/100 == 5 {
+		writer.ErrorBody = append(writer.ErrorBody, data...)
+	}
 	return writer.wrapped.Write(data)
 }
 
