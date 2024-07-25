@@ -53,6 +53,9 @@ func (client *DockerClient) ImageList(ctx context.Context, reference string) ([]
 
 	var images []DockerImageInfo
 	err = json.Unmarshal(content, &images)
+	if err != nil {
+		err = fmt.Errorf("%w while parsing: %v", err, string(content))
+	}
 	return images, err
 }
 
