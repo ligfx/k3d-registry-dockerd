@@ -29,6 +29,12 @@ func NewDockerClient() (*DockerClient, error) {
 			},
 		},
 	}
+
+	// TODO: try to do version negotiation
+	// - check /_ping for the API-Version header?
+	// - check /version for supported range (can you call this without a version?)
+	// - if it's not v1.44, throw a big warning but let the user keep going
+
 	return client, nil
 }
 
@@ -36,7 +42,7 @@ func (client *DockerClient) ImageList(ctx context.Context, reference string) ([]
 	req, err := http.NewRequestWithContext(
 		ctx,
 		"GET",
-		fmt.Sprintf("http://unix/v1.45/images/json?filters={\"reference\":[\"%s\"]}", reference),
+		fmt.Sprintf("http://unix/v1.44/images/json?filters={\"reference\":[\"%s\"]}", reference),
 		nil)
 	if err != nil {
 		return nil, err
@@ -63,7 +69,7 @@ func (client *DockerClient) ImagePull(ctx context.Context, reference string, sta
 	req, err := http.NewRequestWithContext(
 		ctx,
 		"POST",
-		fmt.Sprintf("http://unix/v1.45/images/create?fromImage=%s", reference),
+		fmt.Sprintf("http://unix/v1.44/images/create?fromImage=%s", reference),
 		nil)
 	if err != nil {
 		return err
@@ -91,7 +97,7 @@ func (client *DockerClient) ImagePull(ctx context.Context, reference string, sta
 }
 
 func (client *DockerClient) ImageExport(ctx context.Context, reference string) (*tar.Reader, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://unix/v1.45/images/%s/get", reference), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://unix/v1.44/images/%s/get", reference), nil)
 	if err != nil {
 		return nil, err
 	}

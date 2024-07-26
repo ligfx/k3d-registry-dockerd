@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Logs errors when handling HTTP requests, rather than just sending them to the client. This makes it far easier to debug when things go wrong.
 - Correctly return errors when copying files to local cache
 - Improves error messages when trying to communicate with the Docker daemon by including JSON content that failed to unmarshal in the error message
+- Lower required Docker engine API version to v1.44 from v1.45. This seems to correspond with the earliest engine version that supported fully-OCI-compliant image export.
 
 ## [0.4] - 2024-05-25
 
