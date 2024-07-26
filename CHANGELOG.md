@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Correctly return errors when copying files to local cache
 - Improves error messages when trying to communicate with the Docker daemon by including JSON content that failed to unmarshal in the error message
 - Lower required Docker engine API version to v1.44 from v1.45. This seems to correspond with the earliest engine version that supported fully-OCI-compliant image export.
+- Bugfix: close HTTP request bodies correctly
 
 ## [0.4] - 2024-05-25
 

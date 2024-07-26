@@ -51,6 +51,7 @@ func (client *DockerClient) ImageList(ctx context.Context, reference string) ([]
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -78,6 +79,7 @@ func (client *DockerClient) ImagePull(ctx context.Context, reference string, sta
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
 		return nil
 	}
@@ -96,22 +98,23 @@ func (client *DockerClient) ImagePull(ctx context.Context, reference string, sta
 	return scanner.Err()
 }
 
-func (client *DockerClient) ImageExport(ctx context.Context, reference string) (*tar.Reader, error) {
+func (client *DockerClient) ImageExport(ctx context.Context, reference string, tarballHandler func(*tar.Reader) error) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://unix/v1.44/images/%s/get", reference), nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	resp, err := client.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		content, _ := io.ReadAll(resp.Body)
-		return nil, errors.New(fmt.Sprint(resp.Status, ": ", string(content)))
+		return errors.New(fmt.Sprint(resp.Status, ": ", string(content)))
 	}
 
-	return tar.NewReader(resp.Body), nil
+	return tarballHandler(tar.NewReader(resp.Body))
 }
 
 func (client *DockerClient) Close() {

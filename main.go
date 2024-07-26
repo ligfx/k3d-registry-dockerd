@@ -170,11 +170,10 @@ func getManifest(ctx context.Context, fullName string) (io.Reader, error) {
 		}
 
 		log.Printf("Exporting Docker image %s %s", fullName, imageInfo.Id)
-		tarball, err := docker.ImageExport(ctx, imageInfo.Id)
-		if err != nil {
-			return nil, err
-		}
-		err = saveOciImageToCache(fullName, imageInfo.Id, tarball)
+		err = docker.ImageExport(ctx, imageInfo.Id, func(tarball *tar.Reader) error {
+			return saveOciImageToCache(fullName, imageInfo.Id, tarball)
+		})
+
 		if err != nil {
 			return nil, err
 		}
