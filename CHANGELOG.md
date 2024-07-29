@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.5] - 2024-07-29
 
 - Downloads multiple images in parallel, which improves cluster startup time. Uses [golang.org/x/sync's singleflight package](https://pkg.go.dev/golang.org/x/sync@v0.7.0/singleflight) to coalesce multiple requests for the same image and ensure that downloads don't interfere with one another.
 - Logs errors when handling HTTP requests, rather than just sending them to the client. This makes it far easier to debug when things go wrong.
