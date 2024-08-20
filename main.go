@@ -232,30 +232,36 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 
 	// handle manifests which are referenced by digest (just grab the blob)
 	if strings.HasPrefix(tagOrDigest, "sha256:") {
-		// TODO: be smarter about content-type. save the file mimetypes by crawling the manifests...?
-		w.Header().Add("Content-Type", req.Header["Accept"][0])
+		// TODO: be smarter about content-type. grab the file mimetype by crawling the manifest...?
+		fmt.Printf("%v\n", req.Header["Accept"])
+		w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
 		shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
 		blob, err := readCachedBlobForSha256(shasum)
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
 		}
-		if blob == nil {
-			http.NotFound(w, req)
+		if blob != nil {
+			// TOOO: this is very close to the same logic as below, combine these somehow
+			if req.Method == "GET" {
+				_, err = io.Copy(w, blob)
+				if err != nil {
+					http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+					return
+				}
+			}
 			return
 		}
-		if req.Method == "GET" {
-			_, err = io.Copy(w, blob)
-			if err != nil {
-				http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
-				return
-			}
-		}
-		return
+		// fall through if we don't find a manifest, and try to export it
 	}
 
 	// build the full image name, e.g. domain/namespace/image:tag
-	fullName := fmt.Sprint(name, ":", tagOrDigest)
+	var fullName string
+	if strings.HasPrefix(tagOrDigest, "sha256:") {
+		fullName = fmt.Sprint(name, "@", tagOrDigest)
+	} else {
+		fullName = fmt.Sprint(name, ":", tagOrDigest)
+	}
 	if domain != "docker.io" {
 		fullName = fmt.Sprint(domain, "/", fullName)
 	}
