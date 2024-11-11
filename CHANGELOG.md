@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.6] - 2024-11-11
 - Supports images specified in `domain/name@sha256:digest` format (such as `registry.k8s.io/ingress-nginx/controller@sha256:d5f8217feea...`)
 
 ## [0.5] - 2024-07-29
