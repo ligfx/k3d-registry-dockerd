@@ -228,31 +228,21 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		fullName = fmt.Sprint(domain, "/", fullName)
 	}
 
-	// handle manifests which are referenced by digest (just grab the blob)
-	if strings.HasPrefix(tagOrDigest, "sha256:") {
-		// TODO: be smarter about content-type. grab the file mimetype by crawling the manifest...?
-		fmt.Printf("%v\n", req.Header["Accept"])
+	// try to get the manifest, then write it out
+	// TODO: check accept header?
+	if !strings.HasPrefix(tagOrDigest, "sha256:") {
 		w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
-		shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
-
-		// get existing blob, or try to export image
-		blob, err := openCachedBlobForSha256(shasum)
-		if blob == nil && err == nil {
-			// try to export image
-			if _, err := openIndex(req.Context(), fullName); err != nil {
-				blob, err = openCachedBlobForSha256(shasum)
-			}
-		}
+		manifest, err := openIndex(req.Context(), fullName)
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
 		}
-		if blob == nil {
+		if manifest == nil {
 			http.NotFound(w, req)
 			return
 		}
 		if req.Method == "GET" {
-			_, err = io.Copy(w, blob)
+			_, err = io.Copy(w, manifest)
 			if err != nil {
 				http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 				return
@@ -261,20 +251,30 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// try to get the manifest, then write it out
-	// TODO: check accept header?
+	// handle manifests which are referenced by digest (just grab the blob)
+	// TODO: be smarter about content-type. grab the file mimetype by crawling the manifest...?
+	fmt.Printf("%v\n", req.Header["Accept"])
 	w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
-	manifest, err := openIndex(req.Context(), fullName)
+	shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
+
+	// get existing blob, or try to export image
+	blob, err := openCachedBlobForSha256(shasum)
+	if blob == nil && err == nil {
+		// try to export image
+		if _, err := openIndex(req.Context(), fullName); err != nil {
+			blob, err = openCachedBlobForSha256(shasum)
+		}
+	}
 	if err != nil {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 		return
 	}
-	if manifest == nil {
+	if blob == nil {
 		http.NotFound(w, req)
 		return
 	}
 	if req.Method == "GET" {
-		_, err = io.Copy(w, manifest)
+		_, err = io.Copy(w, blob)
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
