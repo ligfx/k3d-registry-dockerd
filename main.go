@@ -64,18 +64,6 @@ func cachedBlobFilenameForSha256(sha256 string) string {
 	return fmt.Sprint(CACHE_DIRECTORY, "/blobs/sha256/", sha256)
 }
 
-func openCachedIndex(imageId string, filename string) (io.Reader, error) {
-	cachePath := cachedIndexFilename(imageId, filename)
-	file, err := os.Open(cachePath)
-	// if err == nil {
-	// 	log.Print("Found ", cachePath)
-	// }
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	return file, err
-}
-
 func openCachedBlobForSha256(sha256 string) (io.Reader, error) {
 	cachePath := cachedBlobFilenameForSha256(sha256)
 	file, err := os.Open(cachePath)
@@ -149,10 +137,10 @@ func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) 
 	}
 }
 
-var manifestSingleflightGroup singleflight.Group
+var indexSingleFlightGroup singleflight.Group
 
-func getManifest(ctx context.Context, fullName string) (io.Reader, error) {
-	imageInfo, err, _ := manifestSingleflightGroup.Do(fullName, func() (any, error) {
+func openIndex(ctx context.Context, fullName string) (io.Reader, error) {
+	imageId, err, _ := indexSingleFlightGroup.Do(fullName, func() (any, error) {
 		imageInfo, err := findImage(ctx, fullName)
 		if err != nil {
 			return nil, err
@@ -160,13 +148,12 @@ func getManifest(ctx context.Context, fullName string) (io.Reader, error) {
 		if imageInfo == nil {
 			return nil, nil
 		}
-
-		reader, err := openCachedIndex(imageInfo.Id, "index.json")
-		if err != nil {
-			return nil, err
+		_, err = os.Open(cachedIndexFilename(imageInfo.Id, "index.json"))
+		if err == nil {
+			return imageInfo.Id, nil
 		}
-		if reader != nil {
-			return imageInfo, nil
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
 
 		log.Printf("Exporting Docker image %s %s", fullName, imageInfo.Id)
@@ -178,13 +165,12 @@ func getManifest(ctx context.Context, fullName string) (io.Reader, error) {
 			return nil, err
 		}
 
-		return imageInfo, err
+		return imageInfo.Id, err
 	})
-	if imageInfo == nil || err != nil {
+	if imageId == nil || err != nil {
 		return nil, err
 	}
-
-	return openCachedIndex(imageInfo.(*DockerImageInfo).Id, "index.json")
+	return os.Open(cachedIndexFilename(imageId.(string), "index.json"))
 }
 
 func handleBlobs(w http.ResponseWriter, req *http.Request) {
@@ -269,7 +255,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	// try to get the manifest, then write it out
 	// TODO: check accept header?
 	w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
-	manifest, err := getManifest(req.Context(), fullName)
+	manifest, err := openIndex(req.Context(), fullName)
 	if err != nil {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 		return
