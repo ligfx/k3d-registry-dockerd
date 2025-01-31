@@ -64,7 +64,7 @@ func cachedBlobFilenameForSha256(sha256 string) string {
 	return fmt.Sprint(CACHE_DIRECTORY, "/blobs/sha256/", sha256)
 }
 
-func readCachedIndex(imageId string, filename string) (io.Reader, error) {
+func openCachedIndex(imageId string, filename string) (io.Reader, error) {
 	cachePath := cachedIndexFilename(imageId, filename)
 	file, err := os.Open(cachePath)
 	// if err == nil {
@@ -76,7 +76,7 @@ func readCachedIndex(imageId string, filename string) (io.Reader, error) {
 	return file, err
 }
 
-func readCachedBlobForSha256(sha256 string) (io.Reader, error) {
+func openCachedBlobForSha256(sha256 string) (io.Reader, error) {
 	cachePath := cachedBlobFilenameForSha256(sha256)
 	file, err := os.Open(cachePath)
 	// if err == nil {
@@ -161,7 +161,7 @@ func getManifest(ctx context.Context, fullName string) (io.Reader, error) {
 			return nil, nil
 		}
 
-		reader, err := readCachedIndex(imageInfo.Id, "index.json")
+		reader, err := openCachedIndex(imageInfo.Id, "index.json")
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +184,7 @@ func getManifest(ctx context.Context, fullName string) (io.Reader, error) {
 		return nil, err
 	}
 
-	return readCachedIndex(imageInfo.(*DockerImageInfo).Id, "index.json")
+	return openCachedIndex(imageInfo.(*DockerImageInfo).Id, "index.json")
 }
 
 func handleBlobs(w http.ResponseWriter, req *http.Request) {
@@ -201,7 +201,7 @@ func handleBlobs(w http.ResponseWriter, req *http.Request) {
 	// TODO: check accept header?
 
 	shasum := strings.TrimPrefix(digest, "sha256:")
-	blob, err := readCachedBlobForSha256(shasum)
+	blob, err := openCachedBlobForSha256(shasum)
 	if err != nil {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 		return
@@ -236,7 +236,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		fmt.Printf("%v\n", req.Header["Accept"])
 		w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
 		shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
-		blob, err := readCachedBlobForSha256(shasum)
+		blob, err := openCachedBlobForSha256(shasum)
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
