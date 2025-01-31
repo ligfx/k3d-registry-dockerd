@@ -2,6 +2,8 @@
 
 set -euxo pipefail
 
+go fmt .
+
 cat Dockerfile |
   sed 's/^RUN /RUN --mount=type=cache,target=\/root\/.cache\/go-build --mount=type=cache,target=\/go\/pkg\/mod /g' |
   docker build . -f - -t ligfx/k3d-registry-dockerd
