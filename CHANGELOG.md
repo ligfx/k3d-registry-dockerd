@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.7] - 2025-01-31
 
 - Returns manifest matching digest instead of `index.json` when images are specified in `domain/name@sha256:digest` format. This would result in a container with a different reported imageID than the one specified.
 - Returns manifest list instead of `index.json` when images are specified in `domain/name:version` format. This would result in a container with a different reported imageID than what was visible in Docker.
