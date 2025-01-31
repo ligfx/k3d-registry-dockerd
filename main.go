@@ -216,32 +216,8 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// handle manifests which are referenced by digest (just grab the blob)
-	if strings.HasPrefix(tagOrDigest, "sha256:") {
-		// TODO: be smarter about content-type. grab the file mimetype by crawling the manifest...?
-		fmt.Printf("%v\n", req.Header["Accept"])
-		w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
-		shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
-		blob, err := openCachedBlobForSha256(shasum)
-		if err != nil {
-			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
-			return
-		}
-		if blob != nil {
-			// TOOO: this is very close to the same logic as below, combine these somehow
-			if req.Method == "GET" {
-				_, err = io.Copy(w, blob)
-				if err != nil {
-					http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
-					return
-				}
-			}
-			return
-		}
-		// fall through if we don't find a manifest, and try to export it
-	}
-
 	// build the full image name, e.g. domain/namespace/image:tag
+	// used for exporting the image if needed
 	var fullName string
 	if strings.HasPrefix(tagOrDigest, "sha256:") {
 		fullName = fmt.Sprint(name, "@", tagOrDigest)
@@ -250,6 +226,39 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	}
 	if domain != "docker.io" {
 		fullName = fmt.Sprint(domain, "/", fullName)
+	}
+
+	// handle manifests which are referenced by digest (just grab the blob)
+	if strings.HasPrefix(tagOrDigest, "sha256:") {
+		// TODO: be smarter about content-type. grab the file mimetype by crawling the manifest...?
+		fmt.Printf("%v\n", req.Header["Accept"])
+		w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
+		shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
+
+		// get existing blob, or try to export image
+		blob, err := openCachedBlobForSha256(shasum)
+		if blob == nil && err == nil {
+			// try to export image
+			if _, err := openIndex(req.Context(), fullName); err != nil {
+				blob, err = openCachedBlobForSha256(shasum)
+			}
+		}
+		if err != nil {
+			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+			return
+		}
+		if blob == nil {
+			http.NotFound(w, req)
+			return
+		}
+		if req.Method == "GET" {
+			_, err = io.Copy(w, blob)
+			if err != nil {
+				http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+				return
+			}
+		}
+		return
 	}
 
 	// try to get the manifest, then write it out
