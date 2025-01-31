@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -228,30 +229,62 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		fullName = fmt.Sprint(domain, "/", fullName)
 	}
 
-	// try to get the manifest, then write it out
-	// TODO: check accept header?
+	// note that Docker gives us a top-level index.json file with the mimetype
+	// application/vnd.oci.image.index.v1+json which is handled correctly by K8s,
+	// but results in a different image digest! Docker seems to calculate image
+	// digests based off the manifest list file referenced in index.json, with
+	// mimetype application/vnd.docker.distribution.manifest.list.v2+json.
+	// in order to keep image ids identical to what users see in `docker image ls`,
+	// follow the index.json and return the manifest list instead.
 	if !strings.HasPrefix(tagOrDigest, "sha256:") {
-		w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
-		manifest, err := openIndex(req.Context(), fullName)
+		// get index.json, exporting image if we haven't yet
+		r, err := openIndex(req.Context(), fullName)
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
 		}
-		if manifest == nil {
+		if r == nil {
 			http.NotFound(w, req)
 			return
 		}
-		if req.Method == "GET" {
-			_, err = io.Copy(w, manifest)
-			if err != nil {
-				http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
-				return
+		content, err := io.ReadAll(r)
+		if err != nil {
+			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+			return
+		}
+
+		// parse list of manifest files from index
+		var index struct {
+			// SchemaVersion int
+			// MediaType string
+			Manifests []struct {
+				// MediaType string
+				// Size int
+				// Anotations map[string]string
+				Digest string
 			}
 		}
+		err = json.Unmarshal(content, &index)
+		// TODO:for these errors, should we just log it and return the index content as-is?
+		if err != nil {
+			http.Error(w, fmt.Sprintf("%w while parsing: %v", err, string(content)), http.StatusInternalServerError)
+			return
+		}
+		if len(index.Manifests) != 1 {
+			http.Error(w, fmt.Sprintf("len(manifests) != 1 while parsing: %v", string(content)), http.StatusInternalServerError)
+			return
+		}
+
+		// redirect to get the actual manifest
+		http.Redirect(w, req, fmt.Sprintf("/v2/%s/manifests/%s?ns=%s", name, index.Manifests[0].Digest, domain), http.StatusFound)
 		return
 	}
 
-	// handle manifests which are referenced by digest (just grab the blob)
+	// at this point, we know we have a URL like image@sha256:shasum. all we need to do
+	// is grab the manifest, likely a application/vnd.docker.distribution.manifest.list.v2+json,
+	// possibly export the image if someone referenced this image directly via shasum
+	// instead of via tag (which would go through the logic above), and then return
+	// the contents to the client.
 	// TODO: be smarter about content-type. grab the file mimetype by crawling the manifest...?
 	fmt.Printf("%v\n", req.Header["Accept"])
 	w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")

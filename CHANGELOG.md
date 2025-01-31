@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 ## [Unreleased]
 
 - Returns manifest matching digest instead of `index.json` when images are specified in `domain/name@sha256:digest` format. This would result in a container with a different reported imageID than the one specified.
+- Returns manifest list instead of `index.json` when images are specified in `domain/name:version` format. This would result in a container with a different reported imageID than what was visible in Docker.
 
 ## [0.6] - 2024-11-11
 - Supports images specified in `domain/name@sha256:digest` format (such as `registry.k8s.io/ingress-nginx/controller@sha256:d5f8217feea...`)
