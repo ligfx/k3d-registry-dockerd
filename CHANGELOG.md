@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Returns manifest list instead of `index.json` when images are specified in `domain/name:version` format. This would result in a container with a different reported imageID than what was visible in Docker.
 
 ## [0.6] - 2024-11-11
+
 - Supports images specified in `domain/name@sha256:digest` format (such as `registry.k8s.io/ingress-nginx/controller@sha256:d5f8217feea...`)
 
 ## [0.5] - 2024-07-29
