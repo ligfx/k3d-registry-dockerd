@@ -285,12 +285,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	// possibly export the image if someone referenced this image directly via shasum
 	// instead of via tag (which would go through the logic above), and then return
 	// the contents to the client.
-	// TODO: be smarter about content-type. grab the file mimetype by crawling the manifest...?
-	fmt.Printf("%v\n", req.Header["Accept"])
-	w.Header().Add("Content-Type", "application/vnd.oci.image.index.v1+json")
 	shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
-
-	// get existing blob, or try to export image
 	blob, err := openCachedBlobForSha256(shasum)
 	if blob == nil && err == nil {
 		// try to export image
@@ -306,8 +301,30 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		http.NotFound(w, req)
 		return
 	}
+
+	// get the file mimetype from the mediaType json field. all OCI manifest
+	// types should have this.
+	content, err := io.ReadAll(blob)
+	if err != nil {
+		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+		return
+	}
+	var manifest struct {
+		// all OCI manifest files have this field
+		MediaType string
+	}
+	err = json.Unmarshal(content, &manifest)
+	if err != nil {
+		// k8s seems to require a valid content-type for manifest files. if it
+		// doesn't get one, containers will be stuck in "creating" forever.
+		http.Error(w, fmt.Sprintf("%w while parsing, not setting Content-Type for: %v",
+			err, string(content)), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Add("Content-Type", manifest.MediaType)
+
 	if req.Method == "GET" {
-		_, err = io.Copy(w, blob)
+		_, err = w.Write(content)
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
