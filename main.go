@@ -289,7 +289,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	blob, err := openCachedBlobForSha256(shasum)
 	if blob == nil && err == nil {
 		// try to export image
-		if _, err := openIndex(req.Context(), fullName); err != nil {
+		if _, err := openIndex(req.Context(), fullName); err == nil {
 			blob, err = openCachedBlobForSha256(shasum)
 		}
 	}
