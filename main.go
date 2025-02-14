@@ -333,9 +333,26 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
-	// CLI args
-	port := flag.Int("port", 5000, "Port to listen on")
+	// Config taken from CLI args or environment variables
+	defaultAddr := ":5000"
+	environAddrName := "REGISTRY_HTTP_ADDR"
+	addr := flag.String("addr", "", fmt.Sprintf("Address to listen on (default %q, or value of environment variable %s)", defaultAddr, environAddrName))
 	flag.Parse()
+
+	environAddr := os.Getenv(environAddrName)
+
+	if *addr != "" {
+		if environAddr != "" {
+			log.Printf("Ignoring environment variable %s=%q", environAddrName, environAddr)
+		}
+		log.Printf("Using address specified in command line arguments: %q", *addr)
+	} else if environAddr != "" {
+		log.Printf("Using address specified in environment variable %s=%q", environAddrName, environAddr)
+		*addr = environAddr
+	} else {
+		log.Printf("Using default address: %q", defaultAddr)
+		*addr = defaultAddr
+	}
 
 	// set up our global docker client
 	var err error
@@ -353,7 +370,7 @@ func main() {
 	mux.HandleFunc("^/v2/$", handleV2)
 	mux.HandleFunc("^/v2/(?P<name>.+)/blobs/(?P<digest>[^/]+)$", handleBlobs)
 	mux.HandleFunc("^/v2/(?P<name>.+)/manifests/(?P<tagOrDigest>[^/]+)$", handleManifests)
-	log.Printf("Listening on :%d", *port)
-	err = http.ListenAndServe(fmt.Sprintf(":%d", *port), LoggingMiddleware(mux))
+	log.Printf("Listening on %s", *addr)
+	err = http.ListenAndServe(*addr, LoggingMiddleware(mux))
 	log.Fatal(err)
 }
