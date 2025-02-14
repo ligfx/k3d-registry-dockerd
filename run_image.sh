@@ -21,7 +21,12 @@ registries:
       remoteURL: "*"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # - /var/lib/docker:/var/lib/docker
+options:
+  k3s:
+    extraArgs:
+      - arg: "--disable-default-registry-endpoint"
+        nodeFilters:
+          - "all:*"
 HERE
 k3d cluster create mytest --config "$configfile"
 
