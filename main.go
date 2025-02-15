@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,16 +62,24 @@ func findImage(ctx context.Context, imageName, imageTagOrDigest string) (*Docker
 // const CACHE_DIRECTORY = "/var/lib/k3d-registry-dockerd/cache"
 const CACHE_DIRECTORY = "cache"
 
+func cachedImageDirectory(imageName string) string {
+	safeImageName := url.QueryEscape(imageName)
+	if safeImageName == "" || safeImageName == "." || safeImageName == ".." {
+		panic(safeImageName)
+	}
+	return fmt.Sprint(CACHE_DIRECTORY, "/", safeImageName)
+}
+
 func cachedIndexFilename(imageId string, filename string) string {
 	return fmt.Sprint(CACHE_DIRECTORY, "/indexes/", imageId, "/", filename)
 }
 
-func cachedBlobFilenameForSha256(sha256 string) string {
-	return fmt.Sprint(CACHE_DIRECTORY, "/blobs/sha256/", sha256)
+func cachedBlobFilenameForSha256(imageName, sha256 string) string {
+	return fmt.Sprint(cachedImageDirectory(imageName), "/blobs/sha256/", sha256)
 }
 
-func openCachedBlobForSha256(sha256 string) (io.Reader, error) {
-	cachePath := cachedBlobFilenameForSha256(sha256)
+func openCachedBlobForSha256(imageName, sha256 string) (io.Reader, error) {
+	cachePath := cachedBlobFilenameForSha256(imageName, sha256)
 	file, err := os.Open(cachePath)
 	// if err == nil {
 	// 	log.Print("Found ", cachePath)
@@ -109,7 +118,7 @@ func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) 
 		var cachePath string
 		if strings.HasPrefix(header.Name, "blobs/") {
 			// blobs get written directly
-			cachePath = fmt.Sprint(CACHE_DIRECTORY, "/", header.Name)
+			cachePath = fmt.Sprint(cachedImageDirectory(imageName), "/", header.Name)
 			// TODO: if cachePath exists already, skip it
 			bytesWritten, err := copyToFile(cachePath, tarball)
 			if err != nil {
@@ -171,19 +180,22 @@ func openIndex(ctx context.Context, imageName, imageTagOrDigest string) (io.Read
 
 func handleBlobs(w http.ResponseWriter, req *http.Request) {
 	// get the HTTP arguments
-	// name := req.PathValue("name")
+	name := req.PathValue("name")
 	digest := req.PathValue("digest")
-	// domain := req.URL.Query().Get("ns")
-	// if domain == "" {
-	// 	// don't support acting as own repo
-	// 	http.NotFound(w, req)
-	// 	return
-	// }
+	domain := req.URL.Query().Get("ns")
+	if domain == "" {
+		// don't support acting as own repo
+		http.NotFound(w, req)
+		return
+	}
+	if domain != "docker.io" {
+		name = fmt.Sprint(domain, "/", name)
+	}
 
 	// TODO: check accept header?
 
 	shasum := strings.TrimPrefix(digest, "sha256:")
-	blob, err := openCachedBlobForSha256(shasum)
+	blob, err := openCachedBlobForSha256(name, shasum)
 	if err != nil {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 		return
@@ -272,11 +284,11 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	// instead of via tag (which would go through the logic above), and then return
 	// the contents to the client.
 	shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
-	blob, err := openCachedBlobForSha256(shasum)
+	blob, err := openCachedBlobForSha256(name, shasum)
 	if blob == nil && err == nil {
 		// try to export image
 		if _, err := openIndex(req.Context(), name, tagOrDigest); err == nil {
-			blob, err = openCachedBlobForSha256(shasum)
+			blob, err = openCachedBlobForSha256(name, shasum)
 		}
 	}
 	if err != nil {
