@@ -10,6 +10,11 @@ cat Dockerfile |
 
 k3d cluster delete mytest || true
 
+cleanup() {
+  k3d cluster delete mytest
+}
+trap cleanup EXIT
+
 configfile=$(mktemp)
 cat << HERE > "$configfile"
 apiVersion: k3d.io/v1alpha5
