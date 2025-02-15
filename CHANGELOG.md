@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Bugfix: don't return 404 the first time exporting an image specified in `domain/name@sha256:digest` format. Support for these image references was added in version 0.6 and this bug was introduced in version 0.7.
 - Bugfix: don't download multiple versions of the same image in parallel. This could have caused issues with shared blobs overwriting each other. Different images altogether are still downloaded in parallel, as introduced in version 0.5.
 - Bugfix: store cached blobs by image name instead of globally. This could have caused issues with different images having different blobs with the same digest.
+- Supports uploading blobs and manifests, for use with tools like Tilt. Fixes [#12 Attempts to push into the registry returns HTTP 404](https://github.com/ligfx/k3d-registry-dockerd/issues/12).
 
 ## [0.7] - 2025-01-31
 
