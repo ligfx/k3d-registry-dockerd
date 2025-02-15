@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"golang.org/x/sync/singleflight"
 	"io"
 	"log"
 	"net/http"
@@ -27,7 +26,14 @@ func handleV2(w http.ResponseWriter, req *http.Request) {
 	// path has to return 2xx but doesn't have to have content
 }
 
-func findImage(ctx context.Context, fullName string) (*DockerImageInfo, error) {
+func findImage(ctx context.Context, imageName, imageTagOrDigest string) (*DockerImageInfo, error) {
+	var fullName string
+	if strings.HasPrefix(imageTagOrDigest, "sha256:") {
+		fullName = fmt.Sprint(imageName, "@", imageTagOrDigest)
+	} else {
+		fullName = fmt.Sprint(imageName, ":", imageTagOrDigest)
+	}
+
 	images, err := docker.ImageList(ctx, fullName)
 	if err != nil {
 		return nil, err
@@ -127,11 +133,11 @@ func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) 
 	}
 }
 
-var indexSingleFlightGroup singleflight.Group
+var imageMutexPool KeyedMutexPool
 
-func openIndex(ctx context.Context, fullName string) (io.Reader, error) {
-	imageId, err, _ := indexSingleFlightGroup.Do(fullName, func() (any, error) {
-		imageInfo, err := findImage(ctx, fullName)
+func openIndex(ctx context.Context, imageName, imageTagOrDigest string) (io.Reader, error) {
+	imageId, err := imageMutexPool.Do(imageName, func() (any, error) {
+		imageInfo, err := findImage(ctx, imageName, imageTagOrDigest)
 		if err != nil {
 			return nil, err
 		}
@@ -146,9 +152,9 @@ func openIndex(ctx context.Context, fullName string) (io.Reader, error) {
 			return nil, err
 		}
 
-		log.Printf("Exporting Docker image %s %s", fullName, imageInfo.Id)
+		log.Printf("Exporting Docker image %s/%s %s", imageName, imageTagOrDigest, imageInfo.Id)
 		err = docker.ImageExport(ctx, imageInfo.Id, func(tarball *tar.Reader) error {
-			return saveOciImageToCache(fullName, imageInfo.Id, tarball)
+			return saveOciImageToCache(imageName, imageInfo.Id, tarball)
 		})
 
 		if err != nil {
@@ -205,17 +211,8 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		http.NotFound(w, req)
 		return
 	}
-
-	// build the full image name, e.g. domain/namespace/image:tag
-	// used for exporting the image if needed
-	var fullName string
-	if strings.HasPrefix(tagOrDigest, "sha256:") {
-		fullName = fmt.Sprint(name, "@", tagOrDigest)
-	} else {
-		fullName = fmt.Sprint(name, ":", tagOrDigest)
-	}
 	if domain != "docker.io" {
-		fullName = fmt.Sprint(domain, "/", fullName)
+		name = fmt.Sprint(domain, "/", name)
 	}
 
 	// note that Docker gives us a top-level index.json file with the mimetype
@@ -227,7 +224,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	// follow the index.json and return the manifest list instead.
 	if !strings.HasPrefix(tagOrDigest, "sha256:") {
 		// get index.json, exporting image if we haven't yet
-		r, err := openIndex(req.Context(), fullName)
+		r, err := openIndex(req.Context(), name, tagOrDigest)
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
@@ -278,7 +275,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	blob, err := openCachedBlobForSha256(shasum)
 	if blob == nil && err == nil {
 		// try to export image
-		if _, err := openIndex(req.Context(), fullName); err == nil {
+		if _, err := openIndex(req.Context(), name, tagOrDigest); err == nil {
 			blob, err = openCachedBlobForSha256(shasum)
 		}
 	}

@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Reads `REGISTRY_HTTP_ADDR` from the environment like the official registry image. This fixes an issue on k3d 5.8.2 where [custom image registries that don't support `REGISTRY_HTTP_ADDR` no longer work](https://github.com/k3d-io/k3d/issues/1552). k3d 5.8.3 [reverted this behavior](https://github.com/k3d-io/k3d/issues/1552#issuecomment-2661051486), but once it comes back this may also solve [#10 k3d-registry-dockerd doesn't respect port number passed in with "k3d registry create"](https://github.com/ligfx/k3d-registry-dockerd/issues/10).
 - Changes the `-port` CLI option to `-addr`, to better match the environment variable.
 - Bugfix: don't return 404 the first time exporting an image specified in `domain/name@sha256:digest` format. Support for these image references was added in version 0.6 and this bug was introduced in version 0.7.
+- Bugfix: don't download multiple versions of the same image in parallel. This could have caused issues with shared blobs overwriting each other. Different images altogether are still downloaded in parallel, as introduced in version 0.5.
 
 ## [0.7] - 2025-01-31
 
