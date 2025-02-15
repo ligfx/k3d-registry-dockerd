@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -107,7 +109,12 @@ func copyToFile(filename string, reader io.Reader) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return io.Copy(f, reader)
+	bytesWritten, err := io.Copy(f, reader)
+	if err != nil && errors.Is(err, io.ErrUnexpectedEOF) {
+		// happens when reading an HTTP request body
+		err = nil
+	}
+	return bytesWritten, err
 }
 
 func fileExists(filename string) (bool, error) {
@@ -214,6 +221,51 @@ func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string)
 	return found.(bool), err
 }
 
+func handleBlobUpload(w http.ResponseWriter, req *http.Request) {
+	// get the HTTP arguments
+	name := req.PathValue("name")
+	digest := req.URL.Query().Get("digest")
+
+	// if no digest, this is the two-step upload process. respond with the same
+	// URL, and expect a PUT request next.
+	if digest == "" {
+		if req.Method != "POST" {
+			http.Error(w, "", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads", name))
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// if we have a digest, it's either a one-step upload with POST or the
+	// second part of a two-step upload with PUT.
+	// TODO: handle chunked uploads with PATCH?
+	if !(req.Method == "POST" || req.Method == "PUT") {
+		http.Error(w, "", http.StatusMethodNotAllowed)
+		return
+	}
+	if !strings.HasPrefix(digest, "sha256:") {
+		http.Error(w, fmt.Sprintf("don't know how to handle digest %q", digest), http.StatusInternalServerError)
+		return
+	}
+	shasum := strings.TrimPrefix(digest, "sha256:")
+	cachePath := cachedBlobFilenameForSha256(name, shasum)
+	bytesWritten, err := copyToFile(cachePath, req.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error writing %q: %s", cachePath, err), http.StatusInternalServerError)
+		return
+	} else {
+		log.Printf("Wrote %s blobs/sha256/%s (%d bytes)", name, shasum, bytesWritten)
+	}
+
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", name, digest))
+	// docker push, as used by Tilt (and maybe other tools), requires this header
+	// TODO: actually calculate and check our own digest?
+	w.Header().Set("Docker-Content-Digest", digest)
+	w.WriteHeader(http.StatusCreated)
+}
+
 func handleBlobs(w http.ResponseWriter, req *http.Request) {
 	// get the HTTP arguments
 	name := req.PathValue("name")
@@ -244,7 +296,62 @@ func handleBlobs(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func handleManifestUpload(w http.ResponseWriter, req *http.Request) {
+	// get the HTTP arguments
+	name := req.PathValue("name")
+	tagOrDigest := req.PathValue("tagOrDigest")
+
+	// read the manifest to upload
+	content, err := io.ReadAll(req.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+		return
+	}
+
+	// calculate digest, make sure it matches tagOrDigest if necessary
+	shasumbytes := sha256.Sum256(content)
+	shasum := hex.EncodeToString(shasumbytes[:])
+	if strings.HasPrefix(tagOrDigest, "sha256:") && shasum != strings.TrimPrefix(tagOrDigest, "sha256:") {
+		http.Error(w, fmt.Sprint("Mismatched calculated digest %s", shasum), http.StatusBadRequest)
+		return
+	}
+
+	// write manifest as a blob
+	// TODO: what if it already exists?
+	cachePath := cachedBlobFilenameForSha256(name, shasum)
+	bytesWritten, err := copyToFile(cachePath, bytes.NewReader(content))
+	if err != nil {
+		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("Wrote %s blobs/sha256/%s (%d bytes)", name, shasum, bytesWritten)
+
+	// write index, if necessary
+	if !strings.HasPrefix(tagOrDigest, "sha256:") {
+		indexPath := cachedIndexFilename(name, tagOrDigest)
+		// TODO: write a proper index file
+		indexContent := fmt.Sprintf(`{"manifests":[{"digest":"sha256:%s"}]}`, shasum)
+		bytesWritten, err = copyToFile(indexPath, strings.NewReader(indexContent))
+		if err != nil {
+			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Wrote %s/%s index.json (%d bytes)", name, tagOrDigest, bytesWritten)
+	}
+
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, tagOrDigest))
+	// docker push, as used by Tilt (and maybe other tools), requires this header
+	w.Header().Set("Docker-Content-Digest", fmt.Sprintf("sha256:%s", shasum))
+	w.WriteHeader(http.StatusCreated)
+}
+
 func handleManifests(w http.ResponseWriter, req *http.Request) {
+	// handle uploads
+	if req.Method == "PUT" {
+		handleManifestUpload(w, req)
+		return
+	}
+
 	// get the HTTP arguments
 	name := req.PathValue("name")
 	tagOrDigest := req.PathValue("tagOrDigest")
@@ -391,6 +498,7 @@ func main() {
 	mux := NewRegexpServeMux()
 	mux.HandleFunc("^/$", handleHelloWorld)
 	mux.HandleFunc("^/v2/$", handleV2)
+	mux.HandleFunc("^/v2/(?P<name>.+)/blobs/uploads", handleBlobUpload)
 	mux.HandleFunc("^/v2/(?P<name>.+)/blobs/(?P<digest>[^/]+)$", handleBlobs)
 	mux.HandleFunc("^/v2/(?P<name>.+)/manifests/(?P<tagOrDigest>[^/]+)$", handleManifests)
 	log.Printf("Listening on %s", *addr)

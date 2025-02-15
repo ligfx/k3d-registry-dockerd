@@ -62,3 +62,5 @@ For instance, the following should work:
 docker build . -t my-image:latest
 kubectl create deployment my-image --image="my-image:latest"
 ```
+
+k3d-registry-dockerd also supports using tools like [Tilt](https://tilt.dev/) by accepting images pushed directly into the registry.
