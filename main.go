@@ -70,8 +70,12 @@ func cachedImageDirectory(imageName string) string {
 	return fmt.Sprint(CACHE_DIRECTORY, "/", safeImageName)
 }
 
-func cachedIndexFilename(imageId string, filename string) string {
-	return fmt.Sprint(CACHE_DIRECTORY, "/indexes/", imageId, "/", filename)
+func cachedIndexFilename(imageName, imageTagOrDigest string) string {
+	safeImageTagOrDigest := url.QueryEscape(imageTagOrDigest)
+	if safeImageTagOrDigest == "" || safeImageTagOrDigest == "." || safeImageTagOrDigest == ".." {
+		panic(safeImageTagOrDigest)
+	}
+	return fmt.Sprint(cachedImageDirectory(imageName), "/indexes/", safeImageTagOrDigest, "/index.json")
 }
 
 func cachedBlobFilenameForSha256(imageName, sha256 string) string {
@@ -102,7 +106,7 @@ func copyToFile(filename string, reader io.Reader) (int64, error) {
 	return io.Copy(f, reader)
 }
 
-func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) error {
+func saveOciImageToCache(imageName string, imageTagOrDigest string, tarball *tar.Reader) error {
 	for {
 		header, err := tarball.Next()
 		if err == io.EOF {
@@ -125,57 +129,68 @@ func saveOciImageToCache(imageName string, imageId string, tarball *tar.Reader) 
 				return err
 			}
 			log.Printf("Wrote %s (%d bytes)", cachePath, bytesWritten)
-		} else {
-			// index files get written to a different directory
+		} else if header.Name == "index.json" && !strings.HasPrefix(imageTagOrDigest, "sha256:") {
+			// index files get written to a directory depending on the image tag
+			// if the image is being referenced by digest, though, we don't care
 			content, err := io.ReadAll(tarball)
 			if err != nil {
 				return err
 			}
 
-			cachePath = cachedIndexFilename(imageId, strings.TrimPrefix(header.Name, "/"))
+			cachePath = cachedIndexFilename(imageName, imageTagOrDigest)
 			bytesWritten, err := copyToFile(cachePath, bytes.NewReader(content))
 			if err != nil {
 				return err
 			}
 			log.Printf("Wrote %s (%d bytes)", cachePath, bytesWritten)
+		} else {
+			log.Printf("Ignoring %s/%s %s", imageName, imageTagOrDigest, header.Name)
 		}
 	}
 }
 
 var imageMutexPool KeyedMutexPool
 
-func openIndex(ctx context.Context, imageName, imageTagOrDigest string) (io.Reader, error) {
-	imageId, err := imageMutexPool.Do(imageName, func() (any, error) {
-		imageInfo, err := findImage(ctx, imageName, imageTagOrDigest)
-		if err != nil {
-			return nil, err
+func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string) (bool, error) {
+	found, err := imageMutexPool.Do(imageName, func() (any, error) {
+		// check if we have either the index for a tag, or the blob for a digest
+		var cachePath string
+		if strings.HasPrefix(imageTagOrDigest, "sha256:") {
+			cachePath = cachedBlobFilenameForSha256(imageName, strings.TrimPrefix(imageTagOrDigest, "sha256:"))
+		} else {
+			cachePath = cachedIndexFilename(imageName, imageTagOrDigest)
 		}
-		if imageInfo == nil {
-			return nil, nil
-		}
-		_, err = os.Open(cachedIndexFilename(imageInfo.Id, "index.json"))
+		_, err := os.Stat(cachePath)
 		if err == nil {
-			return imageInfo.Id, nil
+			return true, nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
+			return false, err
 		}
 
-		log.Printf("Exporting Docker image %s/%s %s", imageName, imageTagOrDigest, imageInfo.Id)
-		err = docker.ImageExport(ctx, imageInfo.Id, func(tarball *tar.Reader) error {
-			return saveOciImageToCache(imageName, imageInfo.Id, tarball)
-		})
-
+		// otherwise, find and export the image
+		imageInfo, err := findImage(ctx, imageName, imageTagOrDigest)
 		if err != nil {
-			return nil, err
+			return false, err
+		}
+		if imageInfo == nil {
+			return false, nil
 		}
 
-		return imageInfo.Id, err
+		if strings.HasPrefix(imageTagOrDigest, "sha256:") {
+			log.Printf("Exporting Docker image %s@%s", imageName, imageTagOrDigest)
+		} else {
+			log.Printf("Exporting Docker image %s:%s@%s", imageName, imageTagOrDigest, imageInfo.Id)
+		}
+		err = docker.ImageExport(ctx, imageInfo.Id, func(tarball *tar.Reader) error {
+			return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
+		})
+		if err != nil {
+			return false, err
+		}
+		return true, nil
 	})
-	if imageId == nil || err != nil {
-		return nil, err
-	}
-	return os.Open(cachedIndexFilename(imageId.(string), "index.json"))
+	return found.(bool), err
 }
 
 func handleBlobs(w http.ResponseWriter, req *http.Request) {
@@ -227,6 +242,17 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		name = fmt.Sprint(domain, "/", name)
 	}
 
+	// export image if we haven't yet
+	found, err := ensureImageInCache(req.Context(), name, tagOrDigest)
+	if err != nil {
+		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.NotFound(w, req)
+		return
+	}
+
 	// note that Docker gives us a top-level index.json file with the mimetype
 	// application/vnd.oci.image.index.v1+json which is handled correctly by K8s,
 	// but results in a different image digest! Docker seems to calculate image
@@ -235,17 +261,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	// in order to keep image ids identical to what users see in `docker image ls`,
 	// follow the index.json and return the manifest list instead.
 	if !strings.HasPrefix(tagOrDigest, "sha256:") {
-		// get index.json, exporting image if we haven't yet
-		r, err := openIndex(req.Context(), name, tagOrDigest)
-		if err != nil {
-			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
-			return
-		}
-		if r == nil {
-			http.NotFound(w, req)
-			return
-		}
-		content, err := io.ReadAll(r)
+		content, err := os.ReadFile(cachedIndexFilename(name, tagOrDigest))
 		if err != nil {
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
@@ -280,17 +296,9 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 
 	// at this point, we know we have a URL like image@sha256:shasum. all we need to do
 	// is grab the manifest, likely a application/vnd.docker.distribution.manifest.list.v2+json,
-	// possibly export the image if someone referenced this image directly via shasum
-	// instead of via tag (which would go through the logic above), and then return
-	// the contents to the client.
+	// and then return the contents to the client.
 	shasum := strings.TrimPrefix(tagOrDigest, "sha256:")
 	blob, err := openCachedBlobForSha256(name, shasum)
-	if blob == nil && err == nil {
-		// try to export image
-		if _, err := openIndex(req.Context(), name, tagOrDigest); err == nil {
-			blob, err = openCachedBlobForSha256(name, shasum)
-		}
-	}
 	if err != nil {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 		return
