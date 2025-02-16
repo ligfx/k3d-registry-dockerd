@@ -306,9 +306,9 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		// redirect to get the actual manifest
-		http.Redirect(w, req, fmt.Sprintf("/v2/%s/manifests/%s?ns=%s", name, index.Manifests[0].Digest, domain), http.StatusFound)
-		return
+		// we now have the actual manifest digest, so fall through to the logic to
+		// grab and return it.
+		tagOrDigest = index.Manifests[0].Digest
 	}
 
 	// at this point, we know we have a URL like image@sha256:shasum. all we need to do
