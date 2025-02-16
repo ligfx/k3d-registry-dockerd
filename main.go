@@ -106,6 +106,17 @@ func copyToFile(filename string, reader io.Reader) (int64, error) {
 	return io.Copy(f, reader)
 }
 
+func fileExists(filename string) (bool, error) {
+	_, err := os.Stat(filename)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
 func saveOciImageToCache(imageName string, imageTagOrDigest string, tarball *tar.Reader) error {
 	for {
 		header, err := tarball.Next()
@@ -119,16 +130,22 @@ func saveOciImageToCache(imageName string, imageTagOrDigest string, tarball *tar
 			continue
 		}
 
-		var cachePath string
 		if strings.HasPrefix(header.Name, "blobs/") {
 			// blobs get written directly
-			cachePath = fmt.Sprint(cachedImageDirectory(imageName), "/", header.Name)
-			// TODO: if cachePath exists already, skip it
-			bytesWritten, err := copyToFile(cachePath, tarball)
+			cachePath := fmt.Sprint(cachedImageDirectory(imageName), "/", header.Name)
+			exists, err := fileExists(cachePath)
 			if err != nil {
 				return err
 			}
-			log.Printf("Wrote %s (%d bytes)", cachePath, bytesWritten)
+			if exists {
+				log.Printf("Skipping %s %s", imageName, header.Name)
+			} else {
+				bytesWritten, err := copyToFile(cachePath, tarball)
+				if err != nil {
+					return err
+				}
+				log.Printf("Wrote %s %s (%d bytes)", imageName, header.Name, bytesWritten)
+			}
 		} else if header.Name == "index.json" && !strings.HasPrefix(imageTagOrDigest, "sha256:") {
 			// index files get written to a directory depending on the image tag
 			// if the image is being referenced by digest, though, we don't care
@@ -137,12 +154,12 @@ func saveOciImageToCache(imageName string, imageTagOrDigest string, tarball *tar
 				return err
 			}
 
-			cachePath = cachedIndexFilename(imageName, imageTagOrDigest)
+			cachePath := cachedIndexFilename(imageName, imageTagOrDigest)
 			bytesWritten, err := copyToFile(cachePath, bytes.NewReader(content))
 			if err != nil {
 				return err
 			}
-			log.Printf("Wrote %s (%d bytes)", cachePath, bytesWritten)
+			log.Printf("Wrote %s/%s %s (%d bytes)", imageName, imageTagOrDigest, header.Name, bytesWritten)
 		} else {
 			log.Printf("Ignoring %s/%s %s", imageName, imageTagOrDigest, header.Name)
 		}
