@@ -34,6 +34,10 @@ func findImage(ctx context.Context, imageName, imageTagOrDigest string) (*Docker
 	} else {
 		fullName = fmt.Sprint(imageName, ":", imageTagOrDigest)
 	}
+	if strings.HasPrefix(fullName, "docker.io/") {
+		// TODO: consider passing domain separately
+		fullName = strings.TrimPrefix(fullName, "docker.io/")
+	}
 
 	images, err := docker.ImageList(ctx, fullName)
 	if err != nil {
@@ -215,12 +219,7 @@ func handleBlobs(w http.ResponseWriter, req *http.Request) {
 	name := req.PathValue("name")
 	digest := req.PathValue("digest")
 	domain := req.URL.Query().Get("ns")
-	if domain == "" {
-		// don't support acting as own repo
-		http.NotFound(w, req)
-		return
-	}
-	if domain != "docker.io" {
+	if domain != "" {
 		name = fmt.Sprint(domain, "/", name)
 	}
 
@@ -250,24 +249,21 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	name := req.PathValue("name")
 	tagOrDigest := req.PathValue("tagOrDigest")
 	domain := req.URL.Query().Get("ns")
-	if domain == "" {
-		// don't support acting as own repo
-		http.NotFound(w, req)
-		return
-	}
-	if domain != "docker.io" {
+	if domain != "" {
 		name = fmt.Sprint(domain, "/", name)
 	}
 
 	// export image if we haven't yet
-	found, err := ensureImageInCache(req.Context(), name, tagOrDigest)
-	if err != nil {
-		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
-		return
-	}
-	if !found {
-		http.NotFound(w, req)
-		return
+	if domain != "" {
+		found, err := ensureImageInCache(req.Context(), name, tagOrDigest)
+		if err != nil {
+			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.NotFound(w, req)
+			return
+		}
 	}
 
 	// note that Docker gives us a top-level index.json file with the mimetype
@@ -280,7 +276,11 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	if !strings.HasPrefix(tagOrDigest, "sha256:") {
 		content, err := os.ReadFile(cachedIndexFilename(name, tagOrDigest))
 		if err != nil {
-			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+			if errors.Is(err, os.ErrNotExist) {
+				http.NotFound(w, req)
+			} else {
+				http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+			}
 			return
 		}
 
