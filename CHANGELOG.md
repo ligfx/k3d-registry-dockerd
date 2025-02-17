@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Bugfix: don't download multiple versions of the same image in parallel. This could have caused issues with shared blobs overwriting each other. Different images altogether are still downloaded in parallel, as introduced in version 0.5.
 - Bugfix: store cached blobs by image name instead of globally. This could have caused issues with different images having different blobs with the same digest.
 - Supports uploading blobs and manifests, for use with tools like Tilt. Fixes [#12 Attempts to push into the registry returns HTTP 404](https://github.com/ligfx/k3d-registry-dockerd/issues/12).
+- WIP: fix bad images due to https://github.com/moby/moby/issues/49473 by building a dummy image through buildkit.
 
 ## [0.7] - 2025-01-31
 

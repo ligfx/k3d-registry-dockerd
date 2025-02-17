@@ -177,6 +177,89 @@ func saveOciImageToCache(imageName string, imageTagOrDigest string, tarball *tar
 	}
 }
 
+func checkManifestAndReferencesExist(imageName, shasum string) (bool, error) {
+	// This function exists because Docker can sometimes return images with manifests
+	// but no blobs! See https://github.com/moby/moby/issues/49473
+
+	// file needs to exist
+	cachePath := cachedBlobFilenameForSha256(imageName, shasum)
+	ok, err := fileExists(cachePath)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+
+	// read and parse as an OCI manifest or index
+	content, err := os.ReadFile(cachePath)
+	if err != nil {
+		return false, err
+	}
+	var manifestOrIndex struct {
+		MediaType string
+	}
+	err = json.Unmarshal(content, &manifestOrIndex)
+	if err != nil {
+		// if it's some other weird file type, just return it
+		return true, nil
+	}
+
+	// only actual manifests need to be checked. indexes and manifest lists are always valid.
+	if !(manifestOrIndex.MediaType == "application/vnd.oci.image.manifest.v1+json" || manifestOrIndex.MediaType == "application/vnd.docker.distribution.manifest.v2+json") {
+		return true, nil
+	}
+
+	// parse manifest
+	var manifest struct {
+		Config struct {
+			Data   string
+			Digest string
+		}
+		Layers []struct {
+			Data   string
+			Digest string
+		}
+	}
+	err = json.Unmarshal(content, &manifest)
+	if err != nil {
+		return false, err
+	}
+
+	missingDigests := []string{}
+
+	// check we have each referenced blob
+	if manifest.Config.Data == "" {
+		cachePath := cachedBlobFilenameForSha256(imageName, strings.TrimPrefix(manifest.Config.Digest, "sha256:"))
+		ok, err := fileExists(cachePath)
+		if !ok || err != nil {
+			if err != nil {
+				log.Printf("Error checking %q: %w", cachePath, err)
+			}
+			missingDigests = append(missingDigests, strings.TrimPrefix(manifest.Config.Digest, "sha256:"))
+		}
+	}
+	for _, layer := range manifest.Layers {
+		if layer.Data == "" {
+			cachePath := cachedBlobFilenameForSha256(imageName, strings.TrimPrefix(layer.Digest, "sha256:"))
+			ok, err := fileExists(cachePath)
+			if !ok || err != nil {
+				if err != nil {
+					log.Printf("Error checking %q: %w", cachePath, err)
+				}
+				missingDigests = append(missingDigests, strings.TrimPrefix(layer.Digest, "sha256:"))
+			}
+		}
+	}
+
+	if len(missingDigests) == 0 {
+		return true, nil
+	} else {
+		log.Printf("Manifest %s@sha256:%s missing blobs: %v", imageName, shasum, missingDigests)
+		return false, nil
+	}
+}
+
 var imageMutexPool KeyedMutexPool
 
 func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string) (bool, error) {
@@ -188,34 +271,90 @@ func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string)
 		} else {
 			cachePath = cachedIndexFilename(imageName, imageTagOrDigest)
 		}
-		_, err := os.Stat(cachePath)
-		if err == nil {
-			return true, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return false, err
-		}
-
-		// otherwise, find and export the image
-		imageInfo, err := findImage(ctx, imageName, imageTagOrDigest)
+		exists, err := fileExists(cachePath)
 		if err != nil {
-			return false, err
-		}
-		if imageInfo == nil {
 			return false, nil
 		}
 
+		if !exists {
+			// if it doesn't exist, find and export the image
+			imageInfo, err := findImage(ctx, imageName, imageTagOrDigest)
+			if err != nil {
+				return false, err
+			}
+			if imageInfo == nil {
+				return false, nil
+			}
+
+			if strings.HasPrefix(imageTagOrDigest, "sha256:") {
+				log.Printf("Exporting Docker image %s@%s", imageName, imageTagOrDigest)
+			} else {
+				log.Printf("Exporting Docker image %s:%s@%s", imageName, imageTagOrDigest, imageInfo.Id)
+			}
+			err = docker.ImageExport(ctx, imageInfo.Id, func(tarball *tar.Reader) error {
+				return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
+			})
+			if err != nil {
+				return false, err
+			}
+		}
+
+		// Make sure we actually have the blobs. Docker can sometimes return images with manifests
+		// but no blobs! See https://github.com/moby/moby/issues/49473
+		// Check this even if we already had the manifest because k8s will first request the tag, and
+		// then request the index/manifest list (for multi-platform images), and then request the manifest.
+		// TODO: should we do this for tags too? In the case of a single-platform image, k8s will probably
+		// request the tag and then the manifest by digest anyways, but not necessarily.
 		if strings.HasPrefix(imageTagOrDigest, "sha256:") {
-			log.Printf("Exporting Docker image %s@%s", imageName, imageTagOrDigest)
-		} else {
-			log.Printf("Exporting Docker image %s:%s@%s", imageName, imageTagOrDigest, imageInfo.Id)
+			ok, err := checkManifestAndReferencesExist(imageName, strings.TrimPrefix(imageTagOrDigest, "sha256:"))
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				// whoops, need to ask Docker to _really_ give us the image
+				var fullName string
+				if strings.HasPrefix(imageTagOrDigest, "sha256:") {
+					fullName = fmt.Sprint(imageName, "@", imageTagOrDigest)
+				} else {
+					fullName = fmt.Sprint(imageName, ":", imageTagOrDigest)
+				}
+				if strings.HasPrefix(fullName, "docker.io/") {
+					// TODO: consider passing domain separately
+					fullName = strings.TrimPrefix(fullName, "docker.io/")
+				}
+				log.Printf("Attempting to fix %s@%s", imageName, imageTagOrDigest)
+
+				// first pull the digest directly so that it's in Docker's image list and
+				// we can later export it. this is usually a sub-image of a multi-platform
+				// image, and Docker doesn't like if we try to export it directly.
+				// TODO: figure out how to map digests back to image index IDs / tags. this
+				// will help for multi-platform images too if a client pulls a non-default
+				// platform.
+				err = docker.ImagePull(ctx, fullName, func(statusMessage string) {
+					log.Println(statusMessage)
+				})
+				if err != nil {
+					return false, err
+				}
+
+				// pull the digest via buildx, which will download all of the blobs and fix
+				// future exports.
+				err = docker.ImageActuallyPull(ctx, fullName)
+				if err != nil {
+					return false, err
+				}
+
+				//  actually export it.
+				log.Printf("Re-exporting %s@%s", imageName, imageTagOrDigest)
+				err = docker.ImageExport(ctx, fullName, func(tarball *tar.Reader) error {
+					return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
+				})
+				if err != nil {
+					return false, err
+				}
+			}
 		}
-		err = docker.ImageExport(ctx, imageInfo.Id, func(tarball *tar.Reader) error {
-			return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
-		})
-		if err != nil {
-			return false, err
-		}
+
 		return true, nil
 	})
 	return found.(bool), err
