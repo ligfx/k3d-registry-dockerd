@@ -167,7 +167,11 @@ func (myClient *DockerClient) ImageActuallyPull(ctx context.Context, reference s
 		Version:   types.BuilderBuildKit,
 	})
 	if err != nil {
-		content, _ := io.ReadAll(resp.Body)
+		var content []byte
+		if resp.Body != nil {
+			content, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
 		return errors.New(fmt.Sprintf("%w: %q", err, string(content)))
 	}
 
@@ -182,8 +186,11 @@ func (myClient *DockerClient) ImageActuallyPull(ctx context.Context, reference s
 			log.Printf("Error deleting %s: %w", tempTag, err)
 			return
 		}
-		defer resp.Body.Close()
-		content, _ := io.ReadAll(resp.Body)
+		var content []byte
+		if resp.Body != nil {
+			defer resp.Body.Close()
+			content, _ = io.ReadAll(resp.Body)
+		}
 		if resp.StatusCode != 200 {
 			log.Printf("Error deleting %s: HTTP %v: %s", tempTag, resp.Status, string(content))
 			return
@@ -191,11 +198,14 @@ func (myClient *DockerClient) ImageActuallyPull(ctx context.Context, reference s
 		log.Printf("Deleted %s: %s", tempTag, string(content))
 	}()
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		log.Printf("%s", scanner.Text())
+	if resp.Body != nil {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			log.Printf("%s", scanner.Text())
+		}
+		return scanner.Err()
 	}
-	return scanner.Err()
+	return nil // I guess?
 }
 
 func (client *DockerClient) ImageExport(ctx context.Context, reference string, tarballHandler func(*tar.Reader) error) error {
