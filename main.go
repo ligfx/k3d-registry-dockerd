@@ -19,8 +19,6 @@ import (
 	"strings"
 )
 
-var docker *DockerClient
-
 func handleHelloWorld(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprint(w, "Hello, world!\n")
 }
@@ -29,7 +27,7 @@ func handleV2(w http.ResponseWriter, req *http.Request) {
 	// path has to return 2xx but doesn't have to have content
 }
 
-func findImage(ctx context.Context, imageName, imageTagOrDigest string) (*DockerImageInfo, error) {
+func findImageId(ctx context.Context, imageName, imageTagOrDigest string) (*string, error) {
 	var fullName string
 	if strings.HasPrefix(imageTagOrDigest, "sha256:") {
 		fullName = fmt.Sprint(imageName, "@", imageTagOrDigest)
@@ -41,26 +39,24 @@ func findImage(ctx context.Context, imageName, imageTagOrDigest string) (*Docker
 		fullName = strings.TrimPrefix(fullName, "docker.io/")
 	}
 
-	images, err := docker.ImageList(ctx, fullName)
+	images, err := DockerImageList(ctx, fullName)
 	if err != nil {
 		return nil, err
 	}
 	if len(images) == 0 {
-		err = docker.ImagePull(ctx, fullName, func(statusMessage string) {
+		err = DockerImagePull(ctx, fullName, func(statusMessage string) {
 			log.Println(statusMessage)
 		})
 		if err != nil {
 			return nil, err
 		}
-		images, err = docker.ImageList(ctx, fullName)
+		images, err = DockerImageList(ctx, fullName)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if len(images) != 0 {
-		info := new(DockerImageInfo)
-		*info = images[0]
-		return info, nil
+		return &images[0].ID, nil
 	}
 	return nil, nil
 }
@@ -197,20 +193,20 @@ func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string)
 		}
 
 		// otherwise, find and export the image
-		imageInfo, err := findImage(ctx, imageName, imageTagOrDigest)
+		imageId, err := findImageId(ctx, imageName, imageTagOrDigest)
 		if err != nil {
 			return false, err
 		}
-		if imageInfo == nil {
+		if imageId == nil {
 			return false, nil
 		}
 
 		if strings.HasPrefix(imageTagOrDigest, "sha256:") {
 			log.Printf("Exporting Docker image %s@%s", imageName, imageTagOrDigest)
 		} else {
-			log.Printf("Exporting Docker image %s:%s@%s", imageName, imageTagOrDigest, imageInfo.Id)
+			log.Printf("Exporting Docker image %s:%s@%s", imageName, imageTagOrDigest, *imageId)
 		}
-		err = docker.ImageExport(ctx, imageInfo.Id, func(tarball *tar.Reader) error {
+		err = DockerImageExport(ctx, *imageId, func(tarball *tar.Reader) error {
 			return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
 		})
 		if err != nil {
@@ -484,13 +480,18 @@ func main() {
 		*addr = defaultAddr
 	}
 
-	// set up our global docker client
-	var err error
-	docker, err = NewDockerClient()
+	// test docker client
+	ctx := context.Background()
+	info, err := DockerGetInfo(ctx)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	defer docker.Close()
+	log.Printf("Connected to Docker API v%s at %s ServerVersion=%s ServerOSType=%s ServerArchitecture=%s",
+		info.ApiVersion,
+		info.DaemonHost,
+		info.ServerVersion,
+		info.ServerOSType,
+		info.ServerArchitecture)
 
 	// the actual HTTP server
 	// uses custom routing because image names may contain slashes / multiple path segments!

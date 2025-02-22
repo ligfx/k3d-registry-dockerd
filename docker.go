@@ -4,119 +4,116 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
 )
 
-type DockerImageInfo struct {
-	Id string
+func withDockerClient(f func(*client.Client) error) error {
+	// TODO: turn this into a connection pool later if needed
+
+	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("error creating Docker client: %w", err)
+	}
+	defer c.Close()
+
+	// TODO: throw a big warning if v1.44 is not available but let the user keep going?
+	// that seems to be the first version that exports images with OCI layout
+
+	return f(c)
 }
 
-type DockerClient struct {
-	httpClient http.Client
-}
-
-func NewDockerClient() (*DockerClient, error) {
-	client := new(DockerClient)
-	client.httpClient = http.Client{
-		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", "/var/run/docker.sock")
-			},
-		},
-	}
-
-	// TODO: try to do version negotiation
-	// - check /_ping for the API-Version header?
-	// - check /version for supported range (can you call this without a version?)
-	// - if it's not v1.44, throw a big warning but let the user keep going
-
-	return client, nil
-}
-
-func (client *DockerClient) ImageList(ctx context.Context, reference string) ([]DockerImageInfo, error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		"GET",
-		fmt.Sprintf("http://unix/v1.44/images/json?filters={\"reference\":[\"%s\"]}", reference),
-		nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var images []DockerImageInfo
-	err = json.Unmarshal(content, &images)
-	if err != nil {
-		err = fmt.Errorf("%w while parsing: %v", err, string(content))
-	}
-	return images, err
-}
-
-func (client *DockerClient) ImagePull(ctx context.Context, reference string, statusHandler func(statusMessage string)) error {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		"POST",
-		fmt.Sprintf("http://unix/v1.44/images/create?fromImage=%s", reference),
-		nil)
-	if err != nil {
+func withDockerClientValue[T any](f func(*client.Client) (T, error)) (T, error) {
+	var result T
+	err := withDockerClient(func(c *client.Client) error {
+		var err error
+		result, err = f(c)
 		return err
-	}
-	resp, err := client.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 404 {
-		return nil
-	}
+	})
+	return result, err
+}
 
-	if resp.StatusCode != 200 {
-		content, _ := io.ReadAll(resp.Body)
-		return errors.New(fmt.Sprint(resp.Status, ": ", string(content)))
-	}
+func DockerGetClientVersion(ctx context.Context) (string, error) {
+	return withDockerClientValue(func(c *client.Client) (string, error) {
+		return c.ClientVersion(), nil
+	})
+}
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		if statusHandler != nil {
-			statusHandler(scanner.Text())
+func DockerGetDaemonHost(ctx context.Context) (string, error) {
+	return withDockerClientValue(func(c *client.Client) (string, error) {
+		return c.DaemonHost(), nil
+	})
+}
+
+type DockerInfo struct {
+	ApiVersion         string
+	DaemonHost         string
+	ServerVersion      string
+	ServerOSType       string
+	ServerArchitecture string
+}
+
+func DockerGetInfo(ctx context.Context) (DockerInfo, error) {
+	return withDockerClientValue(func(c *client.Client) (DockerInfo, error) {
+		info := DockerInfo{
+			ApiVersion:         c.ClientVersion(),
+			DaemonHost:         c.DaemonHost(),
+			ServerVersion:      "unknown",
+			ServerOSType:       "unknown",
+			ServerArchitecture: "unknown",
 		}
-	}
-	return scanner.Err()
+
+		serverInfo, err := c.Info(ctx)
+		if err != nil {
+			return info, nil
+		}
+		info.ServerVersion = serverInfo.ServerVersion
+		info.ServerOSType = serverInfo.OSType
+		info.ServerArchitecture = serverInfo.Architecture
+
+		return info, nil
+	})
 }
 
-func (client *DockerClient) ImageExport(ctx context.Context, reference string, tarballHandler func(*tar.Reader) error) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://unix/v1.44/images/%s/get", reference), nil)
-	if err != nil {
-		return err
-	}
-	resp, err := client.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		content, _ := io.ReadAll(resp.Body)
-		return errors.New(fmt.Sprint(resp.Status, ": ", string(content)))
-	}
-
-	return tarballHandler(tar.NewReader(resp.Body))
+func DockerImageList(ctx context.Context, reference string) ([]image.Summary, error) {
+	return withDockerClientValue(func(c *client.Client) ([]image.Summary, error) {
+		filt := filters.NewArgs()
+		filt.Add("reference", reference)
+		return c.ImageList(ctx, image.ListOptions{Filters: filt})
+	})
 }
 
-func (client *DockerClient) Close() {
-	client.httpClient.CloseIdleConnections()
+func DockerImagePull(ctx context.Context, reference string, statusHandler func(statusMessage string)) error {
+	return withDockerClient(func(c *client.Client) error {
+		resp, err := c.ImagePull(ctx, reference, image.PullOptions{})
+		if resp != nil {
+			defer resp.Close()
+		}
+		if err != nil {
+			return fmt.Errorf("error pulling image %s: %w", reference, err)
+		}
+
+		scanner := bufio.NewScanner(resp)
+		for scanner.Scan() {
+			if statusHandler != nil {
+				statusHandler(scanner.Text())
+			}
+		}
+		return scanner.Err()
+	})
+}
+
+func DockerImageExport(ctx context.Context, reference string, tarballHandler func(*tar.Reader) error) error {
+	return withDockerClient(func(c *client.Client) error {
+		resp, err := c.ImageSave(ctx, []string{reference})
+		if resp != nil {
+			defer resp.Close()
+		}
+		if err != nil {
+			return fmt.Errorf("error exporting image %s: %w", reference, err)
+		}
+		return tarballHandler(tar.NewReader(resp))
+	})
 }
