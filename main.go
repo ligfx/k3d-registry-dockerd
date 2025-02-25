@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -377,41 +376,24 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	// in order to keep image ids identical to what users see in `docker image ls`,
 	// follow the index.json and return the manifest list instead.
 	if !strings.HasPrefix(tagOrDigest, "sha256:") {
-		content, err := os.ReadFile(cachedIndexFilename(name, tagOrDigest))
+		index, err := ParseIndexFile(cachedIndexFilename(name, tagOrDigest))
+		// TODO: for these errors, should we just log it and return the index content as-is?
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				http.NotFound(w, req)
-			} else {
-				http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+				return
 			}
-			return
-		}
-
-		// parse list of manifest files from index
-		var index struct {
-			// SchemaVersion int
-			// MediaType string
-			Manifests []struct {
-				// MediaType string
-				// Size int
-				// Anotations map[string]string
-				Digest string
-			}
-		}
-		err = json.Unmarshal(content, &index)
-		// TODO:for these errors, should we just log it and return the index content as-is?
-		if err != nil {
-			http.Error(w, fmt.Sprintf("%w while parsing: %v", err, string(content)), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
 		}
 		if len(index.Manifests) != 1 {
-			http.Error(w, fmt.Sprintf("len(manifests) != 1 while parsing: %v", string(content)), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("len(manifests) != 1 while parsing: %v", index), http.StatusInternalServerError)
 			return
 		}
 
 		// we now have the actual manifest digest, so fall through to the logic to
 		// grab and return it.
-		tagOrDigest = index.Manifests[0].Digest
+		tagOrDigest = index.Manifests[0].Digest.String()
 	}
 
 	// at this point, we know we have a URL like image@sha256:shasum. all we need to do
@@ -435,11 +417,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 		return
 	}
-	var manifest struct {
-		// all OCI manifest files have this field
-		MediaType string
-	}
-	err = json.Unmarshal(content, &manifest)
+	mt, err := ParseMediaTypedBytes(content)
 	if err != nil {
 		// k8s seems to require a valid content-type for manifest files. if it
 		// doesn't get one, containers will be stuck in "creating" forever.
@@ -447,7 +425,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 			err, string(content)), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Add("Content-Type", manifest.MediaType)
+	w.Header().Add("Content-Type", mt.MediaType)
 
 	if req.Method == "GET" {
 		_, err = w.Write(content)

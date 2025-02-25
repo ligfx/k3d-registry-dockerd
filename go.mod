@@ -2,7 +2,10 @@ module ligfx.github.io/k3d-registry-dockerd
 
 go 1.22.2
 
-require github.com/docker/docker v28.0.0+incompatible
+require (
+	github.com/docker/docker v28.0.0+incompatible
+	github.com/opencontainers/image-spec v1.1.0
+)
 
 require (
 	github.com/Microsoft/go-winio v0.4.14 // indirect
@@ -18,7 +21,6 @@ require (
 	github.com/moby/term v0.5.2 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.59.0 // indirect
