@@ -125,6 +125,29 @@ func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string)
 		return false, err
 	}
 	if !blobsExist {
+		// try to fix the image by going through Buildkit, which will download all of the
+		// blobs and fix future exports.
+		log.Printf("Attempting to fix %s using BuildKit", fullName)
+		err = BuildkitForceDockerPull(ctx, fullName)
+		if err != nil {
+			// if we get an error, just print and move on
+			log.Printf("Error while attempting to use BuildKit: %s", err)
+		} else {
+			// if BuildKit was successful, re-export image and check it again
+			log.Printf("Re-exporting %s", fullName)
+			err = DockerImageExport(ctx, fullName, func(tarball *tar.Reader) error {
+				return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
+			})
+			if err != nil {
+				return false, err
+			}
+			blobsExist, err = checkManifestAndReferencedBlobsExist(imageName, manifestDigest)
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+	if !blobsExist {
 		log.Printf(
 			"Error: exported Docker image %s was missing referenced blobs. This is known to happen when"+
 				" using Docker's containerd image store and pulling images that share layers. See"+

@@ -88,12 +88,15 @@ When Docker is using the containerd image store, images may be exported without 
 This seems to happen when images share layers with another image that has already been pulled,
 and containerd discards the blobs.
 
-To get a usable export for these images, containerd must be explicitly told to fetch the blobs.
-This can be done through the containerd API; a containerd client (such as `ctr content fetch $image`
-or `nerdctl image pull --unpack=false $image`); or by building a new image based off the problematic
-image using BuildKit (such as with `echo "FROM $image" | docker buildx build -`).
+k3d-registry-dockerd will detect this situation and attempt to automatically fix the containerd
+image store by building a new child image using the BuildKit API (à la
+`echo "FROM $image" | docker buildx build -`), which makes containerd fetch the blobs.
 
-k3d-registry-dockerd will detect this situation, log an error, and return an HTTP 404 Not
-Found status telling Kubernetes to try another registry.
+If the export is still missing blobs, k3d-registry-dockerd will log an error and return an HTTP
+404 Not Found status telling Kubernetes to try another registry.
+
+If building a child image through BuildKit did not fix the issue, containerd can be explicitly
+told to fetch the blobs via the containerd API or by using a containerd client, such as with
+`ctr content fetch $image` or `nerdctl image pull --unpack=false $image`.
 
 See [#13 `docker save` sometimes returns images missing blobs](https://github.com/ligfx/k3d-registry-dockerd/issues/13) and [moby/moby#49473 `docker save` with containerd snapshotter returns OCI images missing all blob layers when image shares layers with another image](https://github.com/moby/moby/issues/49473)
