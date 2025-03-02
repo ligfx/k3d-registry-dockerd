@@ -101,6 +101,49 @@ func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string)
 		}
 	}
 
+	// Scenario 2. Images which have layers in common with other images may be
+	// exported without any layer blobs when the containerd image store is being
+	// used.
+	// See https://github.com/ligfx/k3d-registry-dockerd/issues/13
+	// and https://github.com/moby/moby/issues/49473
+	var manifestDigest string
+	if strings.HasPrefix(imageTagOrDigest, "sha256:") {
+		manifestDigest = strings.TrimPrefix(imageTagOrDigest, "sha256:")
+	} else {
+		index, err := ParseIndexFile(cachedIndexFilename(imageName, imageTagOrDigest))
+		if err != nil {
+			return false, err
+		}
+		if len(index.Manifests) != 1 {
+			// TODO: ???
+			return false, fmt.Errorf("len(manifests) != 1 while parsing: %v", index)
+		}
+		manifestDigest = index.Manifests[0].Digest.Encoded()
+	}
+	blobsExist, err := checkManifestAndReferencedBlobsExist(imageName, manifestDigest)
+	if err != nil {
+		return false, err
+	}
+	if !blobsExist {
+		log.Printf(
+			"Error: exported Docker image %s was missing referenced blobs. This is known to happen when"+
+				" using Docker's containerd image store and pulling images that share layers. See"+
+				" https://github.com/ligfx/k3d-registry-dockerd/issues/13 and https://github.com/moby/moby/issues/49473",
+			fullName)
+		// remove the index so that we don't return HTTP 200 in the future.
+		if !strings.HasPrefix(imageTagOrDigest, "sha256:") {
+			err := os.Remove(cachedIndexFilename(imageName, imageTagOrDigest))
+			if err != nil {
+				return false, err
+			}
+			log.Printf("Removing %s index.json", fullName)
+		}
+		// report that the image was not found, so that we return HTTP 404. this
+		// lets k8s know to try another registry, rather than looping forever
+		// retrying an HTTP 500.
+		return false, nil
+	}
+
 	return true, nil
 }
 
@@ -214,6 +257,85 @@ func saveOciImageToCache(imageName string, imageTagOrDigest string, tarball *tar
 			log.Printf("Ignoring %s/%s %s", imageName, imageTagOrDigest, header.Name)
 		}
 	}
+}
+
+func checkManifestAndReferencedBlobsExist(imageName, shasum string) (bool, error) {
+	// This function exists because Docker can sometimes return images with manifests
+	// but no blobs! See https://github.com/ligfx/k3d-registry-dockerd/issues/13
+	// and https://github.com/moby/moby/issues/49473
+
+	// read and parse as an OCI manifest or index
+	cachePath := cachedBlobFilenameForSha256(imageName, shasum)
+	mt, err := ParseMediaTypedFile(cachePath)
+	if err != nil {
+		return false, err
+	}
+
+	// for indexes, we want to make sure that for all referenced manifests that exist,
+	// all of their blobs exist
+	if IsIndexType(mt.MediaType) {
+		index, err := ParseIndexFile(cachePath)
+		if err != nil {
+			return false, err
+		}
+		allExistingManifestsOkay := true
+		for _, m := range index.Manifests {
+			exists, err := fileExists(cachedBlobFilenameForSha256(imageName, m.Digest.Encoded()))
+			if err != nil {
+				return false, err
+			}
+			if exists {
+				ok, err := checkManifestAndReferencedBlobsExist(imageName, m.Digest.Encoded())
+				if err != nil {
+					return false, err
+				}
+				allExistingManifestsOkay = allExistingManifestsOkay && ok
+			}
+		}
+		return allExistingManifestsOkay, nil
+	}
+
+	// for manifests, we want to make sure that all referenced blobs exist.
+	if IsManifestType(mt.MediaType) {
+		manifest, err := ParseManifestFile(cachePath)
+		if err != nil {
+			return false, err
+		}
+
+		missingDigests := []string{}
+
+		// check config blob
+		blobPath := cachedBlobFilenameForSha256(imageName, manifest.Config.Digest.Encoded())
+		exists, err := fileExists(blobPath)
+		if err != nil {
+			return false, fmt.Errorf("error checking %q: %w", blobPath, err)
+		}
+		if !exists && len(manifest.Config.Data) == 0 {
+			missingDigests = append(missingDigests, manifest.Config.Digest.Encoded())
+		}
+
+		// check layer blobs
+		for _, layer := range manifest.Layers {
+			blobPath := cachedBlobFilenameForSha256(imageName, layer.Digest.Encoded())
+			ok, err := fileExists(blobPath)
+			if err != nil {
+				return false, fmt.Errorf("error checking %q: %w", blobPath, err)
+			}
+			if !ok && len(layer.Data) == 0 {
+				missingDigests = append(missingDigests, layer.Digest.Encoded())
+			}
+		}
+
+		if len(missingDigests) > 0 {
+			log.Printf("Manifest %s@sha256:%s missing blobs: %v", imageName, shasum, missingDigests)
+			return false, nil
+		}
+		return true, nil
+	}
+
+	// for any other file type, if it exists assume we're okay
+	log.Printf("checkManifestAndReferencedBlobsExist %s %s unknown media type %s", imageName, shasum, mt.MediaType)
+	return true, nil
 }
 
 var imageMutexPool KeyedMutexPool

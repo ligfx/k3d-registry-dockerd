@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Supports uploading blobs and manifests, for use with tools like Tilt. Fixes [#12 Attempts to push into the registry returns HTTP 404](https://github.com/ligfx/k3d-registry-dockerd/issues/12).
 - Support images referenced without a namespace, like `alpine:latest` or `busybox:latest`. These are passed to the OCI Registry API as `library/name:tagOrDigest`, but need to be passed to Docker without the `library/` prefix. Fixes [#17 Support images specified without namespace](https://github.com/ligfx/k3d-registry-dockerd/issues/17).
 - Logs an error and returns 404 when exporting an image referenced directly by digest and the resulting export does not contain the referenced blob. This is known to happen when not using Docker's containerd image store. See [#14 `docker save` returns incorrect digests for digest-referenced images when not using containerd storage](https://github.com/ligfx/k3d-registry-dockerd/issues/14).
+- Logs an error and returns 404 when exporting an image and the resulting export is missing layer blobs. This is known to happen when using Docker's containerd image store and pulling images that share layers. See [#13 `docker save` sometimes returns images missing blobs](https://github.com/ligfx/k3d-registry-dockerd/issues/13) and [moby/moby#49473 `docker save` with containerd snapshotter returns OCI images missing all blob layers when image shares layers with another image](https://github.com/moby/moby/issues/49473)
 
 ## [0.7] - 2025-01-31
 

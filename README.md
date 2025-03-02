@@ -81,3 +81,19 @@ k3d-registry-dockerd will detect this situation, log an error, and return an HTT
 Found status telling Kubernetes to try another registry.
 
 See [#14 `docker save` returns incorrect digests for digest-referenced images when not using containerd storage](https://github.com/ligfx/k3d-registry-dockerd/issues/14).
+
+### Images may be exported with missing layer blobs when using Docker's containerd image store and pulling images that share layers
+
+When Docker is using the containerd image store, images may be exported without any layer blobs.
+This seems to happen when images share layers with another image that has already been pulled,
+and containerd discards the blobs.
+
+To get a usable export for these images, containerd must be explicitly told to fetch the blobs.
+This can be done through the containerd API; a containerd client (such as `ctr content fetch $image`
+or `nerdctl image pull --unpack=false $image`); or by building a new image based off the problematic
+image using BuildKit (such as with `echo "FROM $image" | docker buildx build -`).
+
+k3d-registry-dockerd will detect this situation, log an error, and return an HTTP 404 Not
+Found status telling Kubernetes to try another registry.
+
+See [#13 `docker save` sometimes returns images missing blobs](https://github.com/ligfx/k3d-registry-dockerd/issues/13) and [moby/moby#49473 `docker save` with containerd snapshotter returns OCI images missing all blob layers when image shares layers with another image](https://github.com/moby/moby/issues/49473)
