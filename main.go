@@ -40,6 +40,11 @@ func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string)
 		// if no domain is passed.
 		// TODO: consider passing domain separately
 		fullName = strings.TrimPrefix(fullName, "docker.io/")
+		if strings.HasPrefix(fullName, "library/") {
+			// remove "library" as an image's namespace if pulling from docker.io,
+			// so that non-namespaced images like alpine:latest or busybox:latest work.
+			fullName = strings.TrimPrefix(fullName, "library/")
+		}
 	}
 
 	// find or pull image.

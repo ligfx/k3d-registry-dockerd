@@ -35,4 +35,6 @@ options:
 HERE
 k3d cluster create mytest --config "$configfile"
 
+kubectl create deployment image-name-without-namespace --image=busybox -- sh -c 'while true; do echo "hello world" && sleep 5; done'
+
 docker logs -f k3d-mytest-registry
