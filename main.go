@@ -44,7 +44,7 @@ func findImageId(ctx context.Context, imageName, imageTagOrDigest string) (*stri
 		return nil, err
 	}
 	if len(images) == 0 {
-		err = DockerImagePull(ctx, fullName, func(statusMessage string) {
+		_, err := DockerImagePull(ctx, fullName, func(statusMessage string) {
 			log.Println(statusMessage)
 		})
 		if err != nil {

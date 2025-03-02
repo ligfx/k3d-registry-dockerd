@@ -8,6 +8,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 )
 
 func withDockerClient(f func(*client.Client) error) error {
@@ -85,14 +86,17 @@ func DockerImageList(ctx context.Context, reference string) ([]image.Summary, er
 	})
 }
 
-func DockerImagePull(ctx context.Context, reference string, statusHandler func(statusMessage string)) error {
-	return withDockerClient(func(c *client.Client) error {
+func DockerImagePull(ctx context.Context, reference string, statusHandler func(statusMessage string)) (bool, error) {
+	return withDockerClientValue(func(c *client.Client) (bool, error) {
 		resp, err := c.ImagePull(ctx, reference, image.PullOptions{})
 		if resp != nil {
 			defer resp.Close()
 		}
 		if err != nil {
-			return fmt.Errorf("error pulling image %s: %w", reference, err)
+			if errdefs.IsNotFound(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("error pulling image %s: %w", reference, err)
 		}
 
 		scanner := bufio.NewScanner(resp)
@@ -101,7 +105,7 @@ func DockerImagePull(ctx context.Context, reference string, statusHandler func(s
 				statusHandler(scanner.Text())
 			}
 		}
-		return scanner.Err()
+		return true, scanner.Err()
 	})
 }
 
