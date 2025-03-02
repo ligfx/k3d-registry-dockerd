@@ -26,7 +26,9 @@ func handleV2(w http.ResponseWriter, req *http.Request) {
 	// path has to return 2xx but doesn't have to have content
 }
 
-func findImageId(ctx context.Context, imageName, imageTagOrDigest string) (*string, error) {
+func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string) (bool, error) {
+	// turn image name and tagOrDigest into a single string that's recognizable
+	// as an image by Docker.
 	var fullName string
 	if strings.HasPrefix(imageTagOrDigest, "sha256:") {
 		fullName = fmt.Sprint(imageName, "@", imageTagOrDigest)
@@ -34,30 +36,40 @@ func findImageId(ctx context.Context, imageName, imageTagOrDigest string) (*stri
 		fullName = fmt.Sprint(imageName, ":", imageTagOrDigest)
 	}
 	if strings.HasPrefix(fullName, "docker.io/") {
+		// remove "docker.io" as an image's domain since that's assumed by Docker
+		// if no domain is passed.
 		// TODO: consider passing domain separately
 		fullName = strings.TrimPrefix(fullName, "docker.io/")
 	}
 
-	images, err := DockerImageList(ctx, fullName)
+	// find or pull image.
+	image, err := DockerImageInspect(ctx, fullName)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	if len(images) == 0 {
-		_, err := DockerImagePull(ctx, fullName, func(statusMessage string) {
+	if image == nil {
+		log.Printf("Pulling Docker image %s", fullName)
+		found, err := DockerImagePull(ctx, fullName, func(statusMessage string) {
 			log.Println(statusMessage)
 		})
 		if err != nil {
-			return nil, err
+			return false, err
 		}
-		images, err = DockerImageList(ctx, fullName)
-		if err != nil {
-			return nil, err
+		if !found {
+			log.Printf("Couldn't find Docker image %s", fullName)
+			return false, nil
 		}
 	}
-	if len(images) != 0 {
-		return &images[0].ID, nil
+
+	// export it into our local cache.
+	log.Printf("Exporting Docker image %s", fullName)
+	err = DockerImageExport(ctx, fullName, func(tarball *tar.Reader) error {
+		return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
+	})
+	if err != nil {
+		return false, err
 	}
-	return nil, nil
+	return true, nil
 }
 
 // const CACHE_DIRECTORY = "/var/lib/k3d-registry-dockerd/cache"
@@ -183,35 +195,16 @@ func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string)
 		} else {
 			cachePath = cachedIndexFilename(imageName, imageTagOrDigest)
 		}
-		_, err := os.Stat(cachePath)
-		if err == nil {
-			return true, nil
+		exists, err := fileExists(cachePath)
+		if err != nil {
+			return false, nil
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return false, err
+		if exists {
+			return true, nil
 		}
 
 		// otherwise, find and export the image
-		imageId, err := findImageId(ctx, imageName, imageTagOrDigest)
-		if err != nil {
-			return false, err
-		}
-		if imageId == nil {
-			return false, nil
-		}
-
-		if strings.HasPrefix(imageTagOrDigest, "sha256:") {
-			log.Printf("Exporting Docker image %s@%s", imageName, imageTagOrDigest)
-		} else {
-			log.Printf("Exporting Docker image %s:%s@%s", imageName, imageTagOrDigest, *imageId)
-		}
-		err = DockerImageExport(ctx, *imageId, func(tarball *tar.Reader) error {
-			return saveOciImageToCache(imageName, imageTagOrDigest, tarball)
-		})
-		if err != nil {
-			return false, err
-		}
-		return true, nil
+		return findAndExportImage(ctx, imageName, imageTagOrDigest)
 	})
 	return found.(bool), err
 }

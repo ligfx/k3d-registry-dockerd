@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
@@ -78,11 +77,16 @@ func DockerGetInfo(ctx context.Context) (DockerInfo, error) {
 	})
 }
 
-func DockerImageList(ctx context.Context, reference string) ([]image.Summary, error) {
-	return withDockerClientValue(func(c *client.Client) ([]image.Summary, error) {
-		filt := filters.NewArgs()
-		filt.Add("reference", reference)
-		return c.ImageList(ctx, image.ListOptions{Filters: filt})
+func DockerImageInspect(ctx context.Context, reference string) (*image.InspectResponse, error) {
+	return withDockerClientValue(func(c *client.Client) (*image.InspectResponse, error) {
+		image, err := c.ImageInspect(ctx, reference)
+		if err != nil {
+			if errdefs.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		return &image, nil
 	})
 }
 
