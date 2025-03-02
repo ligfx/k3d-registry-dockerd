@@ -51,3 +51,14 @@ registries:
 HERE
 k3d cluster create mytest --config "$configfile"
 ```
+
+## Using locally-built images
+
+To use locally-built images, simply give them a tag and reference them as normal in your Kubernetes configuration. Images should _not_ be tagged with the registry's domain.
+
+For instance, the following should work:
+
+```sh
+docker build . -t my-image:latest
+kubectl create deployment my-image --image="my-image:latest"
+```
