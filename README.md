@@ -64,3 +64,20 @@ kubectl create deployment my-image --image="my-image:latest"
 ```
 
 k3d-registry-dockerd also supports using tools like [Tilt](https://tilt.dev/) by accepting images pushed directly into the registry.
+
+## Known issues
+
+There are some known scenarios where Docker will export images that are unusable
+by Kubernetes. They may have the incorrect ID, are missing blobs, etc.
+
+### Images cannot be referenced by digest when not using Docker's containerd image store
+
+When an image is referenced directly by digest (like `name@sha256:digest`) and Docker is
+not using the containerd image store, the exported image will not contain a manifest blob
+matching the expected digest. To get a usable export for these images, Docker must be
+configured to use the containerd image store instead.
+
+k3d-registry-dockerd will detect this situation, log an error, and return an HTTP 404 Not
+Found status telling Kubernetes to try another registry.
+
+See [#14 `docker save` returns incorrect digests for digest-referenced images when not using containerd storage](https://github.com/ligfx/k3d-registry-dockerd/issues/14).

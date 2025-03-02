@@ -36,5 +36,6 @@ HERE
 k3d cluster create mytest --config "$configfile"
 
 kubectl create deployment image-name-without-namespace --image=busybox -- sh -c 'while true; do echo "hello world" && sleep 5; done'
+kubectl create deployment image-referenced-by-digest --image="rancher/mirrored-coredns-coredns@sha256:82979ddf442c593027a57239ad90616deb874e90c365d1a96ad508c2104bdea5"
 
 docker logs -f k3d-mytest-registry

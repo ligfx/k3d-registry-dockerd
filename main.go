@@ -74,6 +74,33 @@ func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string)
 	if err != nil {
 		return false, err
 	}
+
+	// check that the export is valid. there are certain scenarios where Docker
+	// will export images that don't have the correct ID, are missing blobs, etc.
+
+	// Scenario 1. Images referenced by digest aren't exported with the correct ID
+	// when using a non-containerd image store backend.
+	// See https://github.com/ligfx/k3d-registry-dockerd/issues/14
+	if strings.HasPrefix(imageTagOrDigest, "sha256:") {
+		shasum := strings.TrimPrefix(imageTagOrDigest, "sha256:")
+		cachePath := cachedBlobFilenameForSha256(imageName, shasum)
+		exists, err := fileExists(cachePath)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			log.Printf(
+				"Error: exported Docker image %s was missing blob %s. This is known to happen when referencing"+
+					" images directly by SHA256-digest. To export this image correctly, switch to Docker's containerd"+
+					" image store: https://docs.docker.com/desktop/features/containerd/",
+				fullName, imageTagOrDigest)
+			// report that the image was not found, so that we return HTTP 404. this
+			// lets k8s know to try another registry, rather than looping forever
+			// retrying an HTTP 500.
+			return false, nil
+		}
+	}
+
 	return true, nil
 }
 
