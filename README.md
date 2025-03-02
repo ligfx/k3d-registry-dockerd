@@ -100,3 +100,7 @@ told to fetch the blobs via the containerd API or by using a containerd client, 
 `ctr content fetch $image` or `nerdctl image pull --unpack=false $image`.
 
 See [#13 `docker save` sometimes returns images missing blobs](https://github.com/ligfx/k3d-registry-dockerd/issues/13) and [moby/moby#49473 `docker save` with containerd snapshotter returns OCI images missing all blob layers when image shares layers with another image](https://github.com/moby/moby/issues/49473)
+
+## Troubleshooting and reporting bugs
+
+k3d-registry-dockerd outputs detailed logs on all image requests and interactions with Docker. When reporting an issue, please provide these logs, which you can get by running `docker logs $registry_container_name`.
