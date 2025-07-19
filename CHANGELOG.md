@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 - Doesn't keep partial corrupted files when encountering errors writing manifests or blobs. `copyToFile` now first writes to a temporary file in the same directory as the destination, and then renames it to the actual destination filename only if the writes succeeds entirely. Solves [#20 Inconsistent cache state on http error](https://github.com/ligfx/k3d-registry-dockerd/issues/20).
+- Doesn't ignore `io.ErrUnexpectedEOF` errors in `copyToFile`.
 
 ## [0.8] - 2025-03-02
 

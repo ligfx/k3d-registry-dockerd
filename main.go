@@ -227,10 +227,6 @@ func copyToFile(filename string, reader io.Reader) (int64, error) {
 	// write to temp file
 	var bytesWritten int64
 	bytesWritten, err = io.Copy(f, reader)
-	if err != nil && errors.Is(err, io.ErrUnexpectedEOF) {
-		// happens when reading an HTTP request body
-		err = nil
-	}
 	if err != nil {
 		return bytesWritten, err
 	}
