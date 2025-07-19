@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: push-example
+  labels:
+    app: push-example
+spec:
+  selector:
+    matchLabels:
+      app: push-example
+  template:
+    metadata:
+      labels:
+        app: push-example
+    spec:
+      containers:
+      - name: push-example
+        image: push-example-image

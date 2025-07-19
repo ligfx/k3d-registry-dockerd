@@ -1,0 +1,18 @@
+# This is a simple Tiltfile for testing k3d-registry-dockerd push support.
+# It builds a small local Docker image and then pushes it into a k8s cluster.
+#
+# To run it, change into this directory and run:
+#
+#     tilt up --stream
+#
+# then check the k3d-registry-dockerd logs for any errors. You should see a
+# number of PUT and POST requests as Tilt uploads the local image into the registry.
+#
+# Afterwards, you can run:
+#
+#     docker image rm -f $(docker image ls --format '{{.Repository}} {{.ID}}' | grep -E '^localhost:' | cut -d ' ' -f 2)
+#
+# which will clean up the created images from your local Docker instance.
+
+docker_build('push-example-image', '.')
+k8s_yaml('deployment.yaml')
