@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
+## [Unreleased]
+- Doesn't keep partial corrupted files when encountering errors writing manifests or blobs. `copyToFile` now first writes to a temporary file in the same directory as the destination, and then renames it to the actual destination filename only if the writes succeeds entirely. Solves [#20 Inconsistent cache state on http error](https://github.com/ligfx/k3d-registry-dockerd/issues/20).
+
 ## [0.8] - 2025-03-02
 
 - Reads `REGISTRY_HTTP_ADDR` from the environment like the official registry image. This fixes an issue on k3d 5.8.2 where [custom image registries that don't support `REGISTRY_HTTP_ADDR` no longer work](https://github.com/k3d-io/k3d/issues/1552). k3d 5.8.3 [reverted this behavior](https://github.com/k3d-io/k3d/issues/1552#issuecomment-2661051486), but once it comes back this may also solve [#10 k3d-registry-dockerd doesn't respect port number passed in with "k3d registry create"](https://github.com/ligfx/k3d-registry-dockerd/issues/10).

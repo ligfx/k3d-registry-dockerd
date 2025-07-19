@@ -206,19 +206,44 @@ func openCachedBlobForSha256(imageName, sha256 string) (io.Reader, error) {
 }
 
 func copyToFile(filename string, reader io.Reader) (int64, error) {
+	// ensure directory exists
 	err := os.MkdirAll(filepath.Dir(filename), 0777)
 	if err != nil {
 		return 0, err
 	}
-	f, err := os.Create(filename)
+
+	// make temp file
+	f, err := os.CreateTemp(filepath.Dir(filename), filepath.Base(filename))
 	if err != nil {
 		return 0, err
 	}
-	bytesWritten, err := io.Copy(f, reader)
+	defer func() {
+		if err != nil {
+			_ = os.Remove(f.Name())
+		}
+	}()
+	defer f.Close()
+
+	// write to temp file
+	var bytesWritten int64
+	bytesWritten, err = io.Copy(f, reader)
 	if err != nil && errors.Is(err, io.ErrUnexpectedEOF) {
 		// happens when reading an HTTP request body
 		err = nil
 	}
+	if err != nil {
+		return bytesWritten, err
+	}
+	if err = f.Sync(); err != nil {
+		return bytesWritten, err
+	}
+	if err = f.Close(); err != nil {
+		return bytesWritten, err
+	}
+
+	// rename to actual filename
+	// TODO: this is not guaranteed to be atomic on non-Unix platforms
+	err = os.Rename(f.Name(), filename)
 	return bytesWritten, err
 }
 
