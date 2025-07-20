@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: private-registry-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: private-registry-test
+  template:
+    metadata:
+      labels:
+        app: private-registry-test
+    spec:
+      containers:
+      - name: private-registry-test-container
+        image: localhost:15000/busybox:latest
+        command: ["sleep", "60"]
+      imagePullSecrets:
+      - name: private-registry-credentials
+

@@ -1,2 +1,3 @@
 k3d-registry-dockerd
 cache/
+tests/private-registry/htpasswd
