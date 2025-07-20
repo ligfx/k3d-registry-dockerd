@@ -58,7 +58,7 @@ func LoggingMiddleware(inner http.Handler) http.Handler {
 		responseDuration := time.Now().Sub(startTime)
 
 		var errorPart string
-		if loggingWriter.StatusCode/100 == 5 {
+		if loggingWriter.StatusIsError() {
 			errorPart += " - " + string(loggingWriter.ErrorBody)
 		}
 		log.Printf("%d %s - %s %s - (%v)%s",
@@ -78,8 +78,12 @@ func (writer *loggingResponseWriter) Header() http.Header {
 	return writer.wrapped.Header()
 }
 
+func (writer *loggingResponseWriter) StatusIsError() bool {
+	return writer.StatusCode/100 == 4 || writer.StatusCode/100 == 5
+}
+
 func (writer *loggingResponseWriter) Write(data []byte) (int, error) {
-	if writer.StatusCode/100 == 5 {
+	if writer.StatusIsError() {
 		writer.ErrorBody = append(writer.ErrorBody, data...)
 	}
 	return writer.wrapped.Write(data)
