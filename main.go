@@ -26,7 +26,7 @@ func handleV2(w http.ResponseWriter, req *http.Request) {
 	// path has to return 2xx but doesn't have to have content
 }
 
-func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string) (bool, error) {
+func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string, auth *ImageAuthConfig) (bool, error) {
 	// turn image name and tagOrDigest into a single string that's recognizable
 	// as an image by Docker.
 	var fullName string
@@ -53,8 +53,12 @@ func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string)
 		return false, err
 	}
 	if image == nil {
-		log.Printf("Pulling Docker image %s", fullName)
-		found, err := DockerImagePull(ctx, fullName, func(statusMessage string) {
+		if auth == nil {
+			log.Printf("Pulling Docker image %s", fullName)
+		} else {
+			log.Printf("Pulling Docker image %s (credentials supplied for username=%q)", fullName, auth.Username)
+		}
+		found, err := DockerImagePull(ctx, fullName, auth, func(statusMessage string) {
 			log.Println(statusMessage)
 		})
 		if err != nil {
@@ -384,7 +388,7 @@ func checkManifestAndReferencedBlobsExist(imageName, shasum string) (bool, error
 
 var imageMutexPool KeyedMutexPool
 
-func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string) (bool, error) {
+func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string, auth *ImageAuthConfig) (bool, error) {
 	found, err := imageMutexPool.Do(imageName, func() (any, error) {
 		// check if we have either the index for a tag, or the blob for a digest
 		var cachePath string
@@ -402,7 +406,7 @@ func ensureImageInCache(ctx context.Context, imageName, imageTagOrDigest string)
 		}
 
 		// otherwise, find and export the image
-		return findAndExportImage(ctx, imageName, imageTagOrDigest)
+		return findAndExportImage(ctx, imageName, imageTagOrDigest, auth)
 	})
 	return found.(bool), err
 }
@@ -548,8 +552,25 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 
 	// export image if we haven't yet
 	if domain != "" {
-		found, err := ensureImageInCache(req.Context(), name, tagOrDigest)
+		var auth *ImageAuthConfig
+		if username, password, ok := req.BasicAuth(); ok {
+			auth = &ImageAuthConfig{
+				Username: username,
+				Password: password,
+			}
+		}
+		found, err := ensureImageInCache(req.Context(), name, tagOrDigest, auth)
 		if err != nil {
+			if IsUnauthorizedError(err) {
+				if auth == nil {
+					// only add this header if we don't have already auth, otherwise
+					// k8s will keep spamming requests...
+					// realm value doesn't matter, but can't be empty
+					w.Header().Add("WWW-Authenticate", fmt.Sprintf("Basic realm=%q", domain))
+				}
+				http.Error(w, fmt.Sprint(err), http.StatusUnauthorized)
+				return
+			}
 			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 			return
 		}

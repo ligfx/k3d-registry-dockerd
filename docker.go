@@ -6,8 +6,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
+	"strings"
 )
 
 func withDockerClient(f func(*client.Client) error) error {
@@ -90,15 +92,35 @@ func DockerImageInspect(ctx context.Context, reference string) (*image.InspectRe
 	})
 }
 
-func DockerImagePull(ctx context.Context, reference string, statusHandler func(statusMessage string)) (bool, error) {
+type ImageAuthConfig = registry.AuthConfig
+
+func DockerImagePull(ctx context.Context, reference string, auth *ImageAuthConfig, statusHandler func(statusMessage string)) (bool, error) {
 	return withDockerClientValue(func(c *client.Client) (bool, error) {
-		resp, err := c.ImagePull(ctx, reference, image.PullOptions{})
+		opts := image.PullOptions{}
+		if auth != nil {
+			authstring, err := registry.EncodeAuthConfig(*auth)
+			if err != nil {
+				return false, err
+			}
+			opts.RegistryAuth = authstring
+		}
+
+		resp, err := c.ImagePull(ctx, reference, opts)
 		if resp != nil {
 			defer resp.Close()
 		}
 		if err != nil {
 			if errdefs.IsNotFound(err) {
-				return false, nil
+				if auth == nil {
+					// many repositories, including docker.io, do not provide enough information
+					// to know if an image doesn't exist or if we just aren't authorized to know
+					// it exists, and will return a 401 Unauthorized instead of a 404 Not Found.
+					// if the caller of this function didn't provide auth, then return an unauthorized
+					// error so k8s knows to try again with any auth secrets it may have.
+					return false, fmt.Errorf("pull access denied, image does not exist or may require authorization")
+				} else {
+					return false, nil
+				}
 			}
 			return false, fmt.Errorf("error pulling image %s: %w", reference, err)
 		}
@@ -124,4 +146,35 @@ func DockerImageExport(ctx context.Context, reference string, tarballHandler fun
 		}
 		return tarballHandler(tar.NewReader(resp))
 	})
+}
+
+func IsUnauthorizedError(err error) bool {
+	// The Docker errdefs package (actually a shim over the containerd errdefs package)
+	// provides an IsUnauthorized function that theoretically reports if an error is
+	// an unauthorized error.
+	if errdefs.IsUnauthorized(err) {
+		return true
+	}
+
+	// However, in practice, it doesn't seem to work – the error returned when trying
+	// to pull an image which needs authorization is a generic errdefs.errSystem and
+	// errdefs.IsUnauthorized returns false. So, we need to guess based on the contents
+	// of the following error messages instead (as of Docker version 28.1.1):
+	//
+	//     Error response from daemon: failed to resolve reference "${reference}":
+	//     pull access denied, repository does not exist or may require authorization:
+	//     authorization failed: no basic auth credentials
+	//
+	//     Error response from daemon: error from registry: failed to resolve reference
+	//     "${reference}": failed to authorize: failed to fetch oauth token: unexpected
+	//     status from GET request to ${registry_server_auth_url}: 401 Unauthorized
+	//
+	//     Error response from daemon: unknown: failed to resolve reference "${reference}":
+	//     unexpected status from HEAD request to ${registry_server_url}: 401 Unauthorized
+	//
+	if strings.Contains(err.Error(), "authorization") || strings.Contains(err.Error(), "401 Unauthorized") {
+		return true
+	}
+
+	return false
 }
