@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
+## [Unreleased]
+- Recognizes all unauthorized errors that contain the phrase `no basic auth credentials`, in addition to existing known error messages. Merge of [PR#22 Recognize the Unauthorized error message for vanilla registry](https://github.com/ligfx/k3d-registry-dockerd/pull/22), and _actually_ solves [#21 Support authenticated container registry](https://github.com/ligfx/k3d-registry-dockerd/issues/21). Thanks [@frazar](https://github.com/frazar)!
+
 ## [0.9] - 2025-07-20
 - Doesn't keep partial corrupted files when encountering errors writing manifests or blobs. `copyToFile` now first writes to a temporary file in the same directory as the destination, and then renames it to the actual destination filename only if the writes succeeds entirely. Solves [#20 Inconsistent cache state on http error](https://github.com/ligfx/k3d-registry-dockerd/issues/20).
 - Doesn't ignore `io.ErrUnexpectedEOF` errors in `copyToFile`.
