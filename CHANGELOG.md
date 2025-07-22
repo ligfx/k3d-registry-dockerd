@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.10] - 2025-07-22
 - Recognizes all unauthorized errors that contain the phrase `no basic auth credentials`, in addition to existing known error messages. Merge of [PR#22 Recognize the Unauthorized error message for vanilla registry](https://github.com/ligfx/k3d-registry-dockerd/pull/22), and _actually_ solves [#21 Support authenticated container registry](https://github.com/ligfx/k3d-registry-dockerd/issues/21). Thanks [@frazar](https://github.com/frazar)!
 
 ## [0.9] - 2025-07-20
