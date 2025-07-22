@@ -161,6 +161,8 @@ func IsUnauthorizedError(err error) bool {
 	// errdefs.IsUnauthorized returns false. So, we need to guess based on the contents
 	// of the following error messages instead (as of Docker version 28.1.1):
 	//
+	//     Error response from daemon: Head "${reference}": no basic auth credentials
+	//
 	//     Error response from daemon: failed to resolve reference "${reference}":
 	//     pull access denied, repository does not exist or may require authorization:
 	//     authorization failed: no basic auth credentials
@@ -172,7 +174,9 @@ func IsUnauthorizedError(err error) bool {
 	//     Error response from daemon: unknown: failed to resolve reference "${reference}":
 	//     unexpected status from HEAD request to ${registry_server_url}: 401 Unauthorized
 	//
-	if strings.Contains(err.Error(), "authorization") || strings.Contains(err.Error(), "401 Unauthorized") {
+	if strings.Contains(err.Error(), "no basic auth credentials") ||
+		strings.Contains(err.Error(), "authorization") ||
+		strings.Contains(err.Error(), "401 Unauthorized") {
 		return true
 	}
 
