@@ -35,15 +35,27 @@ func findAndExportImage(ctx context.Context, imageName, imageTagOrDigest string,
 	} else {
 		fullName = fmt.Sprint(imageName, ":", imageTagOrDigest)
 	}
-	if strings.HasPrefix(fullName, "docker.io/") {
+	if after, found := strings.CutPrefix(fullName, "docker.io/"); found {
 		// remove "docker.io" as an image's domain since that's assumed by Docker
 		// if no domain is passed.
 		// TODO: consider passing domain separately
-		fullName = strings.TrimPrefix(fullName, "docker.io/")
-		if strings.HasPrefix(fullName, "library/") {
-			// remove "library" as an image's namespace if pulling from docker.io,
-			// so that non-namespaced images like alpine:latest or busybox:latest work.
-			fullName = strings.TrimPrefix(fullName, "library/")
+		fullName = after
+		// remove "library" as an image's namespace if pulling from docker.io,
+		// so that non-namespaced images like alpine:latest or busybox:latest work.
+		fullName = strings.TrimPrefix(fullName, "library/")
+	}
+
+	// Check if this is an ECR repository and get ECR credentials if needed
+	ecrRegistry := GetECRRegistryFromImageName(imageName)
+	if ecrRegistry != "" && auth == nil {
+		log.Printf("Detected ECR repository %s, attempting to get ECR credentials", ecrRegistry)
+		ecrAuth, err := GetECRAuthToken(ctx, ecrRegistry)
+		if err != nil {
+			log.Printf("Failed to get ECR credentials for %s: %v", ecrRegistry, err)
+			// Continue without ECR auth - maybe the image is public or user provided other auth
+		} else if ecrAuth != nil {
+			log.Printf("Successfully obtained ECR credentials for %s", ecrRegistry)
+			auth = ecrAuth
 		}
 	}
 
@@ -502,7 +514,7 @@ func handleManifestUpload(w http.ResponseWriter, req *http.Request) {
 	shasumbytes := sha256.Sum256(content)
 	shasum := hex.EncodeToString(shasumbytes[:])
 	if strings.HasPrefix(tagOrDigest, "sha256:") && shasum != strings.TrimPrefix(tagOrDigest, "sha256:") {
-		http.Error(w, fmt.Sprint("Mismatched calculated digest %s", shasum), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Mismatched calculated digest %s", shasum), http.StatusBadRequest)
 		return
 	}
 
@@ -633,7 +645,7 @@ func handleManifests(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		// k8s seems to require a valid content-type for manifest files. if it
 		// doesn't get one, containers will be stuck in "creating" forever.
-		http.Error(w, fmt.Sprintf("%w while parsing, not setting Content-Type for: %v",
+		http.Error(w, fmt.Sprintf("%v while parsing, not setting Content-Type for: %v",
 			err, string(content)), http.StatusInternalServerError)
 		return
 	}

@@ -104,3 +104,99 @@ See [#13 `docker save` sometimes returns images missing blobs](https://github.co
 ## Troubleshooting and reporting bugs
 
 k3d-registry-dockerd outputs detailed logs on all image requests and interactions with Docker. When reporting an issue, please provide these logs, which you can get by running `docker logs $registry_container_name`.
+
+## ECR Private Repository Support
+
+k3d-registry-dockerd includes built-in support for AWS ECR (Elastic Container Registry) private repositories. ECR support is automatically included in all builds - no special image or configuration is needed beyond providing AWS credentials.
+
+### Prerequisites
+
+1. **AWS CLI or credentials configured** on your host system
+2. **ECR credential helper** installed and configured (this is included in the Docker image)
+3. **AWS credentials** available via one of the standard methods:
+   - Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
+   - AWS profile (`AWS_PROFILE`)
+   - AWS credentials file (`~/.aws/credentials`)
+   - IAM roles (for EC2/ECS instances)
+
+### Usage with ECR
+
+To use k3d-registry-dockerd with ECR private repositories, mount your AWS credentials and set the appropriate environment variables:
+
+```sh
+docker run -d \
+  --name k3d-ecr-registry \
+  --network k3d-mycluster \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v $HOME/.aws:/root/.aws:ro \
+  -v $HOME/.docker:/root/.docker:ro \
+  -e AWS_PROFILE=your-profile \
+  -e HOME=/root \
+  ligfx/k3d-registry-dockerd:latest
+```
+
+Or with explicit AWS credentials:
+
+```sh
+docker run -d \
+  --name k3d-ecr-registry \
+  --network k3d-mycluster \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e AWS_ACCESS_KEY_ID=your-access-key \
+  -e AWS_SECRET_ACCESS_KEY=your-secret-key \
+  -e AWS_REGION=us-west-2 \
+  ligfx/k3d-registry-dockerd:latest
+```
+
+With k3d configuration:
+
+```sh
+configfile=$(mktemp)
+cat << HERE > "$configfile"
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+registries:
+  create:
+    image: ligfx/k3d-registry-dockerd:latest
+    proxy:
+      remoteURL: "*"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - $HOME/.aws:/root/.aws:ro
+      - $HOME/.docker:/root/.docker:ro
+    env:
+      - AWS_PROFILE=your-profile
+      - HOME=/root
+HERE
+k3d cluster create mycluster --config "$configfile"
+```
+
+### How ECR Authentication Works
+
+1. **Automatic Detection**: The registry automatically detects ECR repository URLs (format: `*.dkr.ecr.*.amazonaws.com`)
+2. **Credential Resolution**: When an ECR repository is detected, it uses the ECR credential helper to obtain authentication tokens
+3. **Credential Precedence**: HTTP basic auth (if provided) takes precedence over automatic ECR authentication
+4. **Fallback**: If ECR authentication fails, the registry falls back to normal Docker behavior
+
+### ECR Repository Examples
+
+Once configured, you can use ECR images directly in your Kubernetes manifests:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: my-app
+        image: 123456789012.dkr.ecr.us-west-2.amazonaws.com/my-app:latest
+```
+
+The registry will automatically authenticate with ECR and cache the image locally for faster subsequent deployments.

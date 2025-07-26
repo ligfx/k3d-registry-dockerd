@@ -7,14 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net"
+
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
 	controlapi "github.com/moby/buildkit/api/services/control"
 	buildkitsession "github.com/moby/buildkit/session"
-	"log"
-	"net"
 )
 
 func withBuildkitSession(ctx context.Context, f func(*client.Client, *buildkitsession.Session) error) error {
@@ -31,7 +32,7 @@ func withBuildkitSession(ctx context.Context, f func(*client.Client, *buildkitse
 		go func() {
 			if err := s.Run(ctx, dialSession); err != nil {
 				// TODO: cancel the context passed to ImageBuild?
-				log.Printf("Error in buildkit session: %w", err)
+				log.Printf("Error in buildkit session: %v", err)
 			}
 		}()
 		defer s.Close()
